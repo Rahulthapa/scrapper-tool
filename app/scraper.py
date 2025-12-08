@@ -1180,6 +1180,558 @@ class WebScraper:
         
         return restaurants
     
+    def _parse_opentable_restaurant_page(self, soup: BeautifulSoup, url: str, html_content: str) -> Dict[str, Any]:
+        """
+        Comprehensive parser for OpenTable individual restaurant pages.
+        Extracts all sections: Overview, Details, Experiences, Offers, Menu, Reviews, FAQs, etc.
+        """
+        restaurant_data = {}
+        
+        # ========== OVERVIEW SECTION ==========
+        # Restaurant name
+        name_elem = soup.select_one('h1.aE-vw__restaurantName, h1[class*="restaurantName"]')
+        if name_elem:
+            restaurant_data['name'] = name_elem.get_text(strip=True)
+        
+        # Rating and review count
+        rating_elem = soup.select_one('#ratingInfo, [data-testid="restaurant-overview-header"] [data-testid="icVipFill"]')
+        if rating_elem:
+            rating_text = rating_elem.find_next(string=re.compile(r'\d+\.?\d*\s*\(\d+\)'))
+            if rating_text:
+                rating_match = re.search(r'(\d+\.?\d*)\s*\((\d+)\)', rating_text)
+                if rating_match:
+                    restaurant_data['rating'] = float(rating_match.group(1))
+                    restaurant_data['review_count'] = int(rating_match.group(2).replace(',', ''))
+        
+        # Price range
+        price_elem = soup.select_one('#priceBandInfo, [data-testid="restaurant-overview-header"]')
+        if price_elem:
+            price_text = price_elem.get_text()
+            price_match = re.search(r'\$(\d+)\s+to\s+\$(\d+)', price_text)
+            if price_match:
+                restaurant_data['price_range'] = f"${price_match.group(1)} to ${price_match.group(2)}"
+        
+        # Cuisine
+        cuisine_elem = soup.select_one('#cuisineInfo, [data-testid="restaurant-overview-header"]')
+        if cuisine_elem:
+            cuisine_text = cuisine_elem.get_text(strip=True)
+            if cuisine_text and cuisine_text != restaurant_data.get('name'):
+                restaurant_data['cuisine'] = cuisine_text
+        
+        # Address
+        address_elem = soup.select_one('[data-testid="addressContainer"], .akxdr__addressContainer, .a4d46__addressText')
+        if address_elem:
+            restaurant_data['address'] = address_elem.get_text(strip=True)
+        
+        # Neighborhood
+        neighborhood_elem = soup.select_one('.a7d03__neighborhood, [data-testid="neighborhood"]')
+        if neighborhood_elem:
+            restaurant_data['neighborhood'] = neighborhood_elem.get_text(strip=True)
+        
+        # ========== ABOUT SECTION ==========
+        about_section = soup.select_one('section:has(h2:contains("About this restaurant"))')
+        if not about_section:
+            about_section = soup.find('h2', string=re.compile('About this restaurant', re.I))
+            if about_section:
+                about_section = about_section.find_parent('section')
+        
+        if about_section:
+            # Tags
+            tags = []
+            tag_elems = about_section.select('.aBeBa__tag, [class*="tag"]')
+            for tag in tag_elems:
+                tag_text = tag.get_text(strip=True)
+                if tag_text:
+                    tags.append(tag_text)
+            if tags:
+                restaurant_data['tags'] = tags
+            
+            # Description
+            desc_elem = about_section.select_one('[data-test="restaurant-description"], .asn86__container')
+            if desc_elem:
+                desc_text = desc_elem.get_text(strip=True)
+                if desc_text:
+                    restaurant_data['description'] = desc_text
+        
+        # ========== DETAILS SECTION ==========
+        details_section = soup.select_one('[data-test="restaurant-details"], section#details')
+        if details_section:
+            details_data = {}
+            
+            # Helper function to find detail by title text
+            def find_detail_by_title(title_text):
+                title_elems = details_section.find_all('span', class_=re.compile('detailTitle', re.I), string=re.compile(title_text, re.I))
+                if not title_elems:
+                    # Try alternative selector
+                    title_elems = details_section.find_all(string=re.compile(title_text, re.I))
+                    title_elems = [e for e in title_elems if e.parent and 'detailTitle' in str(e.parent.get('class', []))]
+                
+                for title_elem in title_elems:
+                    parent = title_elem.find_parent('li')
+                    if parent:
+                        return parent
+                return None
+            
+            # Location
+            location_parent = find_detail_by_title('Location')
+            if location_parent:
+                location_link = location_parent.select_one('a.a0nB0__link')
+                if location_link:
+                    details_data['location'] = location_link.get_text(strip=True)
+                    details_data['location_url'] = location_link.get('href')
+            
+            # Price
+            price_parent = find_detail_by_title('^Price$')
+            if price_parent:
+                price_text = price_parent.select_one('.a-Xkf__detail')
+                if price_text:
+                    details_data['price'] = price_text.get_text(strip=True)
+            
+            # Dining style
+            dining_parent = find_detail_by_title('Dining style')
+            if dining_parent:
+                dining_text = dining_parent.select_one('.a-Xkf__detail')
+                if dining_text:
+                    details_data['dining_style'] = dining_text.get_text(strip=True)
+            
+            # Hours of operation
+            hours_parent = find_detail_by_title('Hours')
+            if hours_parent:
+                hours_text = hours_parent.select_one('.a-Xkf__detail')
+                if hours_text:
+                    details_data['hours'] = hours_text.get_text(strip=True)
+            
+            # Website
+            website_parent = find_detail_by_title('Website')
+            if website_parent:
+                website_link = website_parent.select_one('a.a0nB0__link')
+                if website_link:
+                    details_data['website'] = website_link.get('href')
+            
+            # Payment options
+            payment_parent = find_detail_by_title('Payment')
+            if payment_parent:
+                payment_text = payment_parent.select_one('.a-Xkf__detail')
+                if payment_text:
+                    details_data['payment_options'] = payment_text.get_text(strip=True)
+            
+            # Dress code
+            dress_parent = find_detail_by_title('Dress code')
+            if dress_parent:
+                dress_text = dress_parent.select_one('.a-Xkf__detail')
+                if dress_text:
+                    details_data['dress_code'] = dress_text.get_text(strip=True)
+            
+            # Private party facilities
+            private_parent = find_detail_by_title('Private party facilities')
+            if private_parent:
+                private_text = private_parent.select_one('.a-Xkf__detail')
+                if private_text:
+                    details_data['private_party_facilities'] = private_text.get_text(strip=True)
+            
+            # Private party contact
+            private_contact_parent = find_detail_by_title('Private party contact')
+            if private_contact_parent:
+                private_contact_text = private_contact_parent.select_one('.a-Xkf__detail')
+                if private_contact_text:
+                    details_data['private_party_contact'] = private_contact_text.get_text(strip=True)
+            
+            # Phone number
+            phone_parent = find_detail_by_title('Phone')
+            if phone_parent:
+                phone_link = phone_parent.select_one('a.a0nB0__link[href^="tel:"]')
+                if phone_link:
+                    details_data['phone'] = phone_link.get_text(strip=True)
+            
+            # Cuisines
+            cuisines_parent = find_detail_by_title('Cuisines')
+            if cuisines_parent:
+                cuisines_text = cuisines_parent.select_one('.a-Xkf__detail')
+                if cuisines_text:
+                    details_data['cuisines'] = [c.strip() for c in cuisines_text.get_text(strip=True).split(',')]
+            
+            # Cross street
+            cross_parent = find_detail_by_title('Cross street')
+            if cross_parent:
+                cross_text = cross_parent.select_one('.a-Xkf__detail')
+                if cross_text:
+                    details_data['cross_street'] = cross_text.get_text(strip=True)
+            
+            # Parking details
+            parking_parent = find_detail_by_title('Parking')
+            if parking_parent:
+                parking_text = parking_parent.select_one('.a-Xkf__detail')
+                if parking_text:
+                    details_data['parking_details'] = parking_text.get_text(strip=True)
+            
+            # Executive chef
+            chef_parent = find_detail_by_title('Executive chef')
+            if chef_parent:
+                chef_text = chef_parent.select_one('.a-Xkf__detail')
+                if chef_text:
+                    details_data['executive_chef'] = chef_text.get_text(strip=True)
+            
+            # Additional info
+            additional_parent = find_detail_by_title('Additional')
+            if additional_parent:
+                additional_text = additional_parent.select_one('.a-Xkf__detail')
+                if additional_text:
+                    additional_list = [a.strip() for a in additional_text.get_text(strip=True).split(',')]
+                    details_data['additional'] = additional_list
+            
+            if details_data:
+                restaurant_data['details'] = details_data
+        
+        # ========== EXPERIENCES SECTION ==========
+        experiences_section = soup.select_one('section#experiences, [data-test="experiences"]')
+        if experiences_section:
+            experiences = []
+            experience_items = experiences_section.select('li.aNJ-1__container, [data-test="experience-title"]')
+            for exp in experience_items:
+                exp_data = {}
+                
+                # Title
+                title_elem = exp.select_one('h3[data-test="experience-title"], .aQTFf__title')
+                if title_elem:
+                    exp_data['title'] = title_elem.get_text(strip=True)
+                
+                # Price
+                price_elem = exp.select_one('[data-test="experience-price"], .aMvJi__text')
+                if price_elem:
+                    exp_data['price'] = price_elem.get_text(strip=True)
+                
+                # Schedule
+                schedule_elem = exp.select_one('[data-test="experience-schedule"], .ajdI7__schedule')
+                if schedule_elem:
+                    exp_data['schedule'] = schedule_elem.get_text(strip=True)
+                
+                # Description
+                desc_elem = exp.select_one('.ar38L__description, .amRka__truncated')
+                if desc_elem:
+                    exp_data['description'] = desc_elem.get_text(strip=True)
+                
+                if exp_data:
+                    experiences.append(exp_data)
+            
+            if experiences:
+                restaurant_data['experiences'] = experiences
+        
+        # ========== OFFERS SECTION ==========
+        offers_section = soup.select_one('section#offers, [data-test="offers"]')
+        if offers_section:
+            offers = []
+            offer_items = offers_section.select('li.aNJ-1__container, [data-test="experience-title"]')
+            for offer in offer_items:
+                offer_data = {}
+                
+                # Title
+                title_elem = offer.select_one('h3[data-test="experience-title"], .aQTFf__title')
+                if title_elem:
+                    offer_data['title'] = title_elem.get_text(strip=True)
+                
+                # Schedule
+                schedule_elem = offer.select_one('[data-test="experience-schedule"], .ajdI7__schedule')
+                if schedule_elem:
+                    offer_data['schedule'] = schedule_elem.get_text(strip=True)
+                
+                # Times
+                times_elem = offer.select_one('[data-test="experience-times"], .ajdI7__schedule')
+                if times_elem:
+                    offer_data['times'] = times_elem.get_text(strip=True)
+                
+                # Description
+                desc_elem = offer.select_one('.ar38L__description')
+                if desc_elem:
+                    offer_data['description'] = desc_elem.get_text(strip=True)
+                
+                if offer_data:
+                    offers.append(offer_data)
+            
+            if offers:
+                restaurant_data['offers'] = offers
+        
+        # ========== POPULAR DISHES SECTION ==========
+        dishes_section = soup.select_one('section#popular_dishes, [data-test="popular-dishes"]')
+        if dishes_section:
+            dishes = []
+            dish_items = dishes_section.select('li[data-name], [data-testid="dish-card"]')
+            for dish in dish_items:
+                dish_data = {}
+                
+                # Name
+                name_elem = dish.select_one('.aRyvx__dishName, [data-name]')
+                if name_elem:
+                    dish_data['name'] = name_elem.get_text(strip=True) or name_elem.get('data-name')
+                
+                # Description
+                desc_elem = dish.select_one('.auJtF__dishDescription')
+                if desc_elem:
+                    dish_data['description'] = desc_elem.get_text(strip=True)
+                
+                # Reviews
+                reviews_elem = dish.select_one('.ancEm__dishReviews')
+                if reviews_elem:
+                    dish_data['reviews'] = reviews_elem.get_text(strip=True)
+                
+                # Image
+                img_elem = dish.select_one('img')
+                if img_elem:
+                    dish_data['image_url'] = img_elem.get('src')
+                
+                if dish_data.get('name'):
+                    dishes.append(dish_data)
+            
+            if dishes:
+                restaurant_data['popular_dishes'] = dishes
+        
+        # ========== MENU SECTION ==========
+        menu_section = soup.select_one('section#menu, [data-test="menu-content"]')
+        if menu_section:
+            menu_data = {}
+            
+            # Menu tabs
+            menu_tabs = menu_section.select('[data-test="menu-tabs-button"], button[role="tab"]')
+            menu_tab_names = []
+            for tab in menu_tabs:
+                tab_text = tab.get_text(strip=True)
+                if tab_text:
+                    menu_tab_names.append(tab_text)
+            if menu_tab_names:
+                menu_data['menu_types'] = menu_tab_names
+            
+            # Menu items
+            menu_items = []
+            menu_sections = menu_section.select('article[data-test="menu-section"], .aHUd8__container')
+            for section in menu_sections:
+                section_title = section.select_one('h3.aEbvO__menuTitle')
+                if section_title:
+                    section_name = section_title.get_text(strip=True)
+                    
+                    items = section.select('li.aiC5T__item')
+                    section_items = []
+                    for item in items:
+                        item_data = {}
+                        
+                        # Item title and price
+                        item_details = item.select_one('.acT75__itemDetails')
+                        if item_details:
+                            title_span = item_details.select_one('span[data-test="item-title"]')
+                            price_span = item_details.select_one('span[data-test="item-price"]')
+                            if title_span:
+                                item_data['title'] = title_span.get_text(strip=True)
+                            if price_span:
+                                item_data['price'] = price_span.get_text(strip=True)
+                        
+                        # Description
+                        desc = item.select_one('.a3rtU__itemDescription')
+                        if desc:
+                            item_data['description'] = desc.get_text(strip=True)
+                        
+                        # Variations
+                        variations = item.select('li.aMH0N__variationDetails')
+                        if variations:
+                            item_data['variations'] = []
+                            for var in variations:
+                                var_title = var.select_one('span[data-test="variation-title"]')
+                                var_price = var.select_one('span[data-test="variation-price"]')
+                                if var_title:
+                                    var_data = {'title': var_title.get_text(strip=True)}
+                                    if var_price:
+                                        var_data['price'] = var_price.get_text(strip=True)
+                                    item_data['variations'].append(var_data)
+                        
+                        if item_data.get('title'):
+                            section_items.append(item_data)
+                    
+                    if section_items:
+                        menu_items.append({
+                            'section': section_name,
+                            'items': section_items
+                        })
+            
+            if menu_items:
+                menu_data['menu_items'] = menu_items
+            
+            # Last updated
+            last_updated = menu_section.select_one('[data-test="menu-footer"], .aUCtP__footerText')
+            if last_updated:
+                menu_data['last_updated'] = last_updated.get_text(strip=True)
+            
+            if menu_data:
+                restaurant_data['menu'] = menu_data
+        
+        # ========== REVIEWS SECTION ==========
+        reviews_section = soup.select_one('section#reviews, [data-test="reviews-list"]')
+        if reviews_section:
+            reviews_data = {}
+            
+            # Overall rating
+            overall_rating = reviews_section.select_one('.atSiV__ratingValue')
+            if overall_rating:
+                try:
+                    reviews_data['overall_rating'] = float(overall_rating.get_text(strip=True))
+                except:
+                    pass
+            
+            # Rating breakdown
+            rating_list = reviews_section.select('li.aqPbf__rating-container')
+            rating_breakdown = {}
+            for rating_item in rating_list:
+                rating_name = rating_item.select_one('[data-testid="rating-name"]')
+                rating_value = rating_item.select_one('[data-testid="rating-value"]')
+                if rating_name and rating_value:
+                    try:
+                        rating_breakdown[rating_name.get_text(strip=True)] = float(rating_value.get_text(strip=True))
+                    except:
+                        pass
+            if rating_breakdown:
+                reviews_data['rating_breakdown'] = rating_breakdown
+            
+            # Noise level
+            noise_elem = reviews_section.select_one('[data-testid="icNoiseLevel"]')
+            if noise_elem:
+                noise_text = noise_elem.find_next(string=re.compile('Noise'))
+                if noise_text:
+                    noise_match = re.search(r'Noise\s*•\s*(.+)', noise_text)
+                    if noise_match:
+                        reviews_data['noise_level'] = noise_match.group(1).strip()
+            
+            # Review summary
+            summary_elem = reviews_section.select_one('.aoSdt__summary')
+            if summary_elem:
+                reviews_data['summary'] = summary_elem.get_text(strip=True)
+            
+            # Individual reviews
+            review_items = reviews_section.select('li.aafkK__review, [data-test="reviews-list-item"]')
+            reviews_list = []
+            for review in review_items[:10]:  # Limit to 10 reviews
+                review_data = {}
+                
+                # Reviewer name
+                reviewer = review.select_one('.aRUDc__primaryInfo')
+                if reviewer:
+                    review_data['reviewer'] = reviewer.get_text(strip=True)
+                
+                # Rating
+                review_rating = review.select_one('.atSiV__ratingValue')
+                if review_rating:
+                    try:
+                        review_data['rating'] = float(review_rating.get_text(strip=True))
+                    except:
+                        pass
+                
+                # Date
+                date_elem = review.select_one('.aiLkE__submittedDate')
+                if date_elem:
+                    review_data['date'] = date_elem.get_text(strip=True)
+                
+                # Category ratings
+                categories = review.select('li.a-k5x__category')
+                category_ratings = {}
+                for cat in categories:
+                    cat_name = cat.get_text(strip=True).split()[0] if cat.get_text(strip=True) else None
+                    cat_rating = cat.select_one('span')
+                    if cat_name and cat_rating:
+                        try:
+                            category_ratings[cat_name] = int(cat_rating.get_text(strip=True))
+                        except:
+                            pass
+                if category_ratings:
+                    review_data['category_ratings'] = category_ratings
+                
+                # Review text
+                review_text_elem = review.select_one('.a6rFG__reviewText span')
+                if review_text_elem:
+                    review_data['text'] = review_text_elem.get_text(strip=True)
+                
+                # Restaurant response
+                response_elem = review.select_one('[data-test="public-restaurant-reply"]')
+                if response_elem:
+                    response_text = response_elem.select_one('.aGMTG__replyText span')
+                    if response_text:
+                        review_data['restaurant_response'] = response_text.get_text(strip=True)
+                
+                if review_data:
+                    reviews_list.append(review_data)
+            
+            if reviews_list:
+                reviews_data['reviews'] = reviews_list
+            
+            if reviews_data:
+                restaurant_data['reviews'] = reviews_data
+        
+        # ========== FAQs SECTION ==========
+        faqs_section = soup.select_one('section#faqs, [data-test="faqs-item"]')
+        if faqs_section:
+            faqs = []
+            faq_items = faqs_section.select('[data-test="faqs-item"]')
+            for faq in faq_items:
+                faq_data = {}
+                
+                # Question
+                question = faq.select_one('h4.aD1DF__title, button h4')
+                if question:
+                    faq_data['question'] = question.get_text(strip=True)
+                
+                # Answer
+                answer = faq.select_one('.a0EgX__text, [aria-labelledby] p')
+                if answer:
+                    faq_data['answer'] = answer.get_text(strip=True)
+                
+                if faq_data.get('question'):
+                    faqs.append(faq_data)
+            
+            if faqs:
+                restaurant_data['faqs'] = faqs
+        
+        # ========== PHOTOS SECTION ==========
+        photos_section = soup.select_one('section#photos, [data-test="restaurant-photos"]')
+        if photos_section:
+            photo_count_elem = photos_section.select_one('h2')
+            if photo_count_elem:
+                photo_count_text = photo_count_elem.get_text(strip=True)
+                photo_count_match = re.search(r'(\d+)\s+Photos?', photo_count_text)
+                if photo_count_match:
+                    restaurant_data['photo_count'] = int(photo_count_match.group(1))
+            
+            # Photo URLs
+            photo_buttons = photos_section.select('[data-testid="gallery-photo"], button[aria-label*="Enlarge"]')
+            photos = []
+            for photo in photo_buttons[:20]:  # Limit to 20
+                img = photo.select_one('img')
+                if img:
+                    photo_url = img.get('src')
+                    if photo_url:
+                        photos.append(photo_url)
+            if photos:
+                restaurant_data['photos'] = photos
+        
+        # ========== BOOKED TIMES INFO ==========
+        booked_today = soup.select_one('[data-test="icSocialProof"]')
+        if booked_today:
+            booked_text = booked_today.find_next(string=re.compile('Booked'))
+            if booked_text:
+                booked_match = re.search(r'Booked\s+(\d+)\s+times?\s+today', booked_text, re.I)
+                if booked_match:
+                    restaurant_data['booked_today'] = int(booked_match.group(1))
+        
+        # ========== AVAILABLE TIME SLOTS ==========
+        time_slots = soup.select('[data-test="time-slot"], [data-testid^="time-slot"]')
+        if time_slots:
+            available_times = []
+            for slot in time_slots:
+                time_text = slot.get_text(strip=True)
+                if time_text and re.match(r'\d+:\d+\s*(AM|PM)', time_text, re.I):
+                    available_times.append(time_text)
+            if available_times:
+                restaurant_data['available_time_slots'] = available_times
+        
+        # Add source URL
+        restaurant_data['url'] = url
+        restaurant_data['source'] = 'opentable'
+        
+        return restaurant_data
+    
     def _format_address(self, address_data: Any) -> str:
         """Format address from structured data"""
         if isinstance(address_data, str):
@@ -1279,25 +1831,47 @@ class WebScraper:
             if not href:
                 continue
             
+            # Normalize URL first
+            if href.startswith('/'):
+                href = urljoin(listing_url, href)
+            
             # Check if this looks like a restaurant page URL
             href_lower = href.lower()
             is_restaurant_url = (
                 ('/biz/' in href_lower and 'yelp.com' in href_lower) or
                 ('/restaurant/' in href_lower) or
                 ('/r/' in href_lower and 'opentable.com' in href_lower) or
+                (href_lower.startswith('https://www.opentable.com/r/') or href_lower.startswith('http://www.opentable.com/r/')) or
                 ('restaurant' in text and len(text) > 5 and len(text) < 100) or
                 (any(keyword in href_lower for keyword in ['restaurant', 'dining', 'cafe', 'steakhouse']))
             )
             
-            if is_restaurant_url and href not in seen_urls:
-                # Normalize URL
-                if href.startswith('/'):
-                    from urllib.parse import urljoin
-                    href = urljoin(listing_url, href)
-                
-                if href.startswith('http') and href not in seen_urls:
-                    restaurant_urls.append(href)
-                    seen_urls.add(href)
+            if is_restaurant_url and href not in seen_urls and href.startswith('http'):
+                restaurant_urls.append(href)
+                seen_urls.add(href)
+        
+        # Method 2b: Extract OpenTable URLs directly from HTML using BeautifulSoup
+        if 'opentable.com' in listing_url.lower():
+            # Find all links that match OpenTable restaurant URL pattern
+            opentable_links = soup.find_all('a', href=re.compile(r'/r/[^/]+', re.I))
+            for link in opentable_links:
+                href = link.get('href', '')
+                if href:
+                    # Normalize URL
+                    if href.startswith('/'):
+                        href = urljoin(listing_url, href)
+                    elif not href.startswith('http'):
+                        continue
+                    
+                    # Check if it's a valid OpenTable restaurant URL
+                    if '/r/' in href.lower() and 'opentable.com' in href.lower():
+                        # Clean URL (remove query params except necessary ones)
+                        parsed_url = urlparse(href)
+                        clean_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
+                        if clean_url not in seen_urls:
+                            restaurant_urls.append(clean_url)
+                            seen_urls.add(clean_url)
+                            seen_urls.add(href)
         
         # Method 3: Extract from JavaScript variables (if available)
         if use_javascript:
@@ -1315,25 +1889,74 @@ class WebScraper:
                         () => {
                             const urls = [];
                             
-                            // Find all restaurant links
-                            const links = document.querySelectorAll('a[href*="/biz/"], a[href*="/restaurant/"], a[href*="/r/"]');
-                            links.forEach(link => {
-                                const href = link.href;
-                                if (href && (href.includes('/biz/') || href.includes('/restaurant/') || href.includes('/r/'))) {
-                                    urls.push(href);
-                                }
+                            // Find all restaurant links - improved for OpenTable
+                            const linkSelectors = [
+                                'a[href*="/biz/"]',  // Yelp
+                                'a[href*="/restaurant/"]',  // Generic
+                                'a[href*="/r/"]',  // OpenTable
+                                'a[href^="https://www.opentable.com/r/"]',  // OpenTable full URLs
+                                'a[href^="/r/"]'  // OpenTable relative URLs
+                            ];
+                            
+                            linkSelectors.forEach(selector => {
+                                const links = document.querySelectorAll(selector);
+                                links.forEach(link => {
+                                    const href = link.href || link.getAttribute('href');
+                                    if (href) {
+                                        // Normalize relative URLs
+                                        if (href.startsWith('/')) {
+                                            urls.push(window.location.origin + href);
+                                        } else if (href.startsWith('http')) {
+                                            urls.push(href);
+                                        }
+                                    }
+                                });
                             });
                             
                             // Also check for data in window variables
-                            if (window.__PRELOADED_STATE__) {
-                                const data = window.__PRELOADED_STATE__;
-                                // Try to find restaurant URLs in the data
-                                const dataStr = JSON.stringify(data);
-                                const urlMatches = dataStr.match(/https?:\\/\\/[^"\\s]+\\/(?:biz|restaurant|r)\\/[^"\\s]+/g);
-                                if (urlMatches) {
-                                    urls.push(...urlMatches);
+                            const windowVars = [
+                                window.__PRELOADED_STATE__,
+                                window.__NEXT_DATA__,
+                                window.pageData,
+                                window.initialData
+                            ];
+                            
+                            windowVars.forEach(data => {
+                                if (data) {
+                                    try {
+                                        const dataStr = JSON.stringify(data);
+                                        // Match OpenTable restaurant URLs
+                                        const urlPatterns = [
+                                            /https?:\\/\\/[^"\\s]*opentable\\.com\\/r\\/[^"\\s]+/g,
+                                            /https?:\\/\\/[^"\\s]+\\/(?:biz|restaurant|r)\\/[^"\\s]+/g
+                                        ];
+                                        
+                                        urlPatterns.forEach(pattern => {
+                                            const matches = dataStr.match(pattern);
+                                            if (matches) {
+                                                urls.push(...matches);
+                                            }
+                                        });
+                                    } catch (e) {
+                                        // Skip if can't stringify
+                                    }
                                 }
-                            }
+                            });
+                            
+                            // Also check for data attributes
+                            const dataLinks = document.querySelectorAll('[data-url], [data-href], [data-restaurant-url]');
+                            dataLinks.forEach(elem => {
+                                const url = elem.getAttribute('data-url') || 
+                                           elem.getAttribute('data-href') || 
+                                           elem.getAttribute('data-restaurant-url');
+                                if (url && (url.includes('/r/') || url.includes('/biz/') || url.includes('/restaurant/'))) {
+                                    if (url.startsWith('/')) {
+                                        urls.push(window.location.origin + url);
+                                    } else if (url.startsWith('http')) {
+                                        urls.push(url);
+                                    }
+                                }
+                            });
                             
                             return [...new Set(urls)];
                         }
@@ -1412,9 +2035,12 @@ class WebScraper:
             try:
                 logger.info(f"Extracting detailed data from: {url}")
                 
+                # Check if this is an OpenTable URL - use specialized parser
+                is_opentable = 'opentable.com' in url.lower() and '/r/' in url.lower()
+                
                 # Get HTML content for parsing
                 html_content = None
-                if use_javascript:
+                if use_javascript or is_opentable:
                     # For Playwright, get HTML directly
                     try:
                         from playwright.async_api import async_playwright
@@ -1423,7 +2049,7 @@ class WebScraper:
                             context = await browser.new_context()
                             page = await context.new_page()
                             await page.goto(url, wait_until="networkidle", timeout=30000)
-                            await page.wait_for_timeout(2000)
+                            await page.wait_for_timeout(3000)  # Wait for dynamic content
                             html_content = await page.content()
                             await context.close()
                             await browser.close()
@@ -1444,12 +2070,24 @@ class WebScraper:
                     logger.warning(f"Could not get HTML content from {url}")
                     return restaurant_data
                 
+                # Parse HTML
+                soup = BeautifulSoup(html_content, 'html.parser')
+                
+                # Use OpenTable-specific parser if it's an OpenTable URL
+                if is_opentable:
+                    logger.info("Using OpenTable-specific parser for detailed extraction")
+                    opentable_data = self._parse_opentable_restaurant_page(soup, url, html_content)
+                    # Merge with existing restaurant data
+                    detailed_restaurant = restaurant_data.copy()
+                    detailed_restaurant.update(opentable_data)
+                    logger.info(f"Successfully extracted OpenTable data for: {detailed_restaurant.get('name', 'Unknown')}")
+                    return detailed_restaurant
+                
+                # For non-OpenTable pages, use general extraction
                 # Scrape the page for structured data
                 page_data = await self.scrape(url, use_javascript=use_javascript)
                 
                 # Parse HTML for embedded data
-                soup = BeautifulSoup(html_content, 'html.parser')
-                
                 embedded_data = self._extract_embedded_json(soup, url)
                 
                 # Merge detailed data into restaurant
