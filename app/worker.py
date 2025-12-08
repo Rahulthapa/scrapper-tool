@@ -108,8 +108,26 @@ class ScraperWorker:
                 # Count how many have URLs
                 urls_count = sum(1 for item in filtered_data if isinstance(item, dict) and item.get('url'))
                 logger.info(f"Results with URLs: {urls_count}/{len(filtered_data)}")
+                
+                # Log first few URLs to verify
+                urls_found = [item.get('url') for item in filtered_data[:5] if isinstance(item, dict) and item.get('url')]
+                logger.info(f"First 5 URLs being saved: {urls_found}")
             
-            await self.storage.save_results(job_id, filtered_data)
+            # Ensure all items are dicts and have URLs
+            cleaned_data = []
+            for item in filtered_data:
+                if isinstance(item, dict):
+                    # Ensure URL exists
+                    if not item.get('url'):
+                        item['url'] = item.get('extracted_url') or item.get('website') or 'N/A'
+                    cleaned_data.append(item)
+                else:
+                    logger.warning(f"Skipping non-dict item: {type(item)}")
+            
+            if len(cleaned_data) != len(filtered_data):
+                logger.warning(f"Cleaned {len(filtered_data)} items to {len(cleaned_data)} valid dicts")
+            
+            await self.storage.save_results(job_id, cleaned_data)
 
             # Update job status to completed
             await self.storage.update_job(job_id, {
@@ -408,7 +426,8 @@ class ScraperWorker:
             logger.info(f"Step 2 Complete: Extracted data from {len(detailed_restaurants)} individual pages")
             if len(detailed_restaurants) == 0:
                 logger.warning(f"⚠️ WARNING: No restaurants extracted! Expected {len(restaurants_with_urls)}")
-                # Return URLs even if scraping failed
+                # Return ALL extracted URLs even if scraping failed - at least they'll be in CSV
+                logger.info(f"Returning {len(restaurants_with_urls)} URLs (scraping failed but URLs will be in CSV)")
                 return restaurants_with_urls
             elif len(detailed_restaurants) < len(restaurants_with_urls):
                 logger.warning(f"⚠️ WARNING: Only extracted {len(detailed_restaurants)}/{len(restaurants_with_urls)} restaurants")
@@ -432,12 +451,34 @@ class ScraperWorker:
                 if 'source_listing_url' not in restaurant:
                     restaurant['source_listing_url'] = listing_url
             
+            # CRITICAL: Ensure ALL extracted URLs are included, even if scraping failed
+            # Create a set of URLs we already have
+            existing_urls = {r.get('url', '').lower() for r in detailed_restaurants if r.get('url')}
+            
+            # Add any missing URLs as entries (even if scraping failed)
+            for url in restaurant_urls:
+                url_lower = url.lower()
+                if url_lower not in existing_urls:
+                    logger.info(f"Adding missing URL to results: {url}")
+                    detailed_restaurants.append({
+                        'url': url,
+                        'source_listing_url': listing_url,
+                        'extracted_url': url,
+                        'scraping_status': 'not_scraped',
+                        'note': 'URL extracted from listing page but individual page not scraped'
+                    })
+            
             # Log URLs
+            logger.info(f"📋 Final results: {len(detailed_restaurants)} restaurants (from {len(restaurant_urls)} extracted URLs)")
             logger.info(f"📋 Extracted URLs ({len(restaurant_urls)} total):")
             for idx, url in enumerate(restaurant_urls[:20], 1):
                 logger.info(f"   {idx}. {url}")
             if len(restaurant_urls) > 20:
                 logger.info(f"   ... and {len(restaurant_urls) - 20} more URLs")
+            
+            # Final validation: ensure we have at least as many results as URLs
+            if len(detailed_restaurants) < len(restaurant_urls):
+                logger.warning(f"⚠️ Still missing {len(restaurant_urls) - len(detailed_restaurants)} URLs in results!")
             
             return detailed_restaurants
             
