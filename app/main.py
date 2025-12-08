@@ -3,12 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
-from typing import Optional
+from typing import Optional, List
 import uuid
 import json
 import os
 import logging
 from datetime import datetime
+from pathlib import Path
 
 from .models import ScrapeJobCreate, ScrapeJob, ScrapeResult, JobStatus, ParseHTMLRequest, ExtractInternalDataRequest, ExtractFromIndividualPagesRequest
 from .storage import Storage
@@ -152,6 +153,110 @@ async def health_check():
             "timestamp": datetime.utcnow().isoformat()
         }
     )
+
+
+@app.get("/logs")
+async def list_log_files():
+    """List all available log files"""
+    log_dir = Path("scraper_logs")
+    if not log_dir.exists():
+        return {"logs": [], "message": "No log files found"}
+    
+    log_files = []
+    for log_file in sorted(log_dir.glob("*.log"), key=lambda x: x.stat().st_mtime, reverse=True):
+        stat = log_file.stat()
+        log_files.append({
+            "filename": log_file.name,
+            "size": stat.st_size,
+            "created": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            "url": f"/logs/{log_file.name}"
+        })
+    
+    return {
+        "logs": log_files,
+        "total": len(log_files),
+        "log_directory": str(log_dir.absolute())
+    }
+
+
+@app.get("/logs/latest")
+async def get_latest_log():
+    """Get the most recent log file"""
+    log_dir = Path("scraper_logs")
+    if not log_dir.exists():
+        raise HTTPException(status_code=404, detail="No log files found")
+    
+    log_files = list(log_dir.glob("*.log"))
+    if not log_files:
+        raise HTTPException(status_code=404, detail="No log files found")
+    
+    latest_log = max(log_files, key=lambda x: x.stat().st_mtime)
+    
+    return FileResponse(
+        path=str(latest_log),
+        media_type="text/plain",
+        filename=latest_log.name,
+        headers={"Content-Disposition": f"inline; filename={latest_log.name}"}
+    )
+
+
+@app.get("/logs/{filename}")
+async def get_log_file(filename: str):
+    """Get a specific log file by filename"""
+    log_dir = Path("scraper_logs")
+    log_file = log_dir / filename
+    
+    # Security: prevent directory traversal
+    if not log_file.resolve().is_relative_to(log_dir.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
+    if not log_file.exists():
+        raise HTTPException(status_code=404, detail="Log file not found")
+    
+    if not log_file.suffix == ".log":
+        raise HTTPException(status_code=400, detail="Invalid file type")
+    
+    return FileResponse(
+        path=str(log_file),
+        media_type="text/plain",
+        filename=filename,
+        headers={"Content-Disposition": f"inline; filename={filename}"}
+    )
+
+
+@app.get("/logs/{filename}/tail")
+async def tail_log_file(
+    filename: str,
+    lines: int = Query(100, ge=1, le=1000, description="Number of lines to return")
+):
+    """Get the last N lines of a log file"""
+    log_dir = Path("scraper_logs")
+    log_file = log_dir / filename
+    
+    # Security: prevent directory traversal
+    if not log_file.resolve().is_relative_to(log_dir.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
+    if not log_file.exists():
+        raise HTTPException(status_code=404, detail="Log file not found")
+    
+    if not log_file.suffix == ".log":
+        raise HTTPException(status_code=400, detail="Invalid file type")
+    
+    try:
+        with open(log_file, 'r', encoding='utf-8') as f:
+            all_lines = f.readlines()
+            tail_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+        
+        return {
+            "filename": filename,
+            "total_lines": len(all_lines),
+            "returned_lines": len(tail_lines),
+            "lines": tail_lines
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading log file: {str(e)}")
 
 
 @app.get("/debug")
