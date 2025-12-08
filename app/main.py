@@ -19,6 +19,15 @@ from .exporter import DataExporter
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Initialize detailed scraper logger
+try:
+    from .scraper_logger import get_scraper_logger
+    detail_logger = get_scraper_logger()
+    logger.info(f"Detailed scraper logging initialized: {detail_logger.log_file}")
+except ImportError:
+    logger.warning("Detailed scraper logger not available")
+    detail_logger = None
+
 app = FastAPI(
     title="AI Web Scraper",
     description="Intelligent web scraping API with AI-powered filtering and data extraction",

@@ -246,6 +246,13 @@ class ScraperWorker:
             
             # STEP 3: Visit each individual page and extract ALL data
             logger.info(f"Step 2: Visiting {len(restaurants_with_urls)} individual restaurant pages...")
+            try:
+                from app.scraper_logger import get_scraper_logger
+                detail_logger = get_scraper_logger()
+                detail_logger.log_separator(f"VISITING {len(restaurants_with_urls)} INDIVIDUAL RESTAURANT PAGES")
+            except ImportError:
+                detail_logger = None
+            
             detailed_restaurants = await self.scraper.extract_from_individual_pages(
                 restaurants=restaurants_with_urls,
                 use_javascript=True,  # Always use JS for individual pages

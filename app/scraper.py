@@ -6,8 +6,17 @@ import re
 from urllib.parse import urljoin, urlparse, quote_plus
 import json
 import logging
+import time
 
 logger = logging.getLogger(__name__)
+
+# Import detailed logger
+try:
+    from app.scraper_logger import get_scraper_logger
+    detail_logger = get_scraper_logger()
+except ImportError:
+    # Fallback if logger not available
+    detail_logger = None
 
 
 class WebScraper:
@@ -1187,7 +1196,12 @@ class WebScraper:
         """
         restaurant_data = {}
         
+        if detail_logger:
+            detail_logger.log_separator(f"PARSING OPENTABLE PAGE: {url}")
+        
         # ========== OVERVIEW SECTION ==========
+        if detail_logger:
+            detail_logger.log_section_extraction(url, "OVERVIEW", "STARTED")
         # Restaurant name
         name_elem = soup.select_one('h1.aE-vw__restaurantName, h1[class*="restaurantName"]')
         if name_elem:
@@ -1229,6 +1243,8 @@ class WebScraper:
             restaurant_data['neighborhood'] = neighborhood_elem.get_text(strip=True)
         
         # ========== ABOUT SECTION ==========
+        if detail_logger:
+            detail_logger.log_section_extraction(url, "ABOUT", "STARTED")
         about_section = soup.select_one('section:has(h2:contains("About this restaurant"))')
         if not about_section:
             about_section = soup.find('h2', string=re.compile('About this restaurant', re.I))
@@ -1381,8 +1397,13 @@ class WebScraper:
             
             if details_data:
                 restaurant_data['details'] = details_data
+                if detail_logger:
+                    detail_logger.log_section_data(url, "DETAILS", details_data, 
+                        item_count=len(details_data))
         
         # ========== EXPERIENCES SECTION ==========
+        if detail_logger:
+            detail_logger.log_section_extraction(url, "EXPERIENCES", "STARTED")
         experiences_section = soup.select_one('section#experiences, [data-test="experiences"]')
         if experiences_section:
             experiences = []
@@ -1415,8 +1436,13 @@ class WebScraper:
             
             if experiences:
                 restaurant_data['experiences'] = experiences
+                if detail_logger:
+                    detail_logger.log_section_data(url, "EXPERIENCES", experiences, 
+                        item_count=len(experiences))
         
         # ========== OFFERS SECTION ==========
+        if detail_logger:
+            detail_logger.log_section_extraction(url, "OFFERS", "STARTED")
         offers_section = soup.select_one('section#offers, [data-test="offers"]')
         if offers_section:
             offers = []
@@ -1449,8 +1475,12 @@ class WebScraper:
             
             if offers:
                 restaurant_data['offers'] = offers
+                if detail_logger:
+                    detail_logger.log_section_data(url, "OFFERS", offers, item_count=len(offers))
         
         # ========== POPULAR DISHES SECTION ==========
+        if detail_logger:
+            detail_logger.log_section_extraction(url, "POPULAR_DISHES", "STARTED")
         dishes_section = soup.select_one('section#popular_dishes, [data-test="popular-dishes"]')
         if dishes_section:
             dishes = []
@@ -1483,8 +1513,12 @@ class WebScraper:
             
             if dishes:
                 restaurant_data['popular_dishes'] = dishes
+                if detail_logger:
+                    detail_logger.log_section_data(url, "POPULAR_DISHES", dishes, item_count=len(dishes))
         
         # ========== MENU SECTION ==========
+        if detail_logger:
+            detail_logger.log_section_extraction(url, "MENU", "STARTED")
         menu_section = soup.select_one('section#menu, [data-test="menu-content"]')
         if menu_section:
             menu_data = {}
@@ -1559,8 +1593,13 @@ class WebScraper:
             
             if menu_data:
                 restaurant_data['menu'] = menu_data
+                if detail_logger:
+                    menu_items_count = len(menu_data.get('menu_items', []))
+                    detail_logger.log_section_data(url, "MENU", menu_data, item_count=menu_items_count)
         
         # ========== REVIEWS SECTION ==========
+        if detail_logger:
+            detail_logger.log_section_extraction(url, "REVIEWS", "STARTED")
         reviews_section = soup.select_one('section#reviews, [data-test="reviews-list"]')
         if reviews_section:
             reviews_data = {}
@@ -1659,8 +1698,13 @@ class WebScraper:
             
             if reviews_data:
                 restaurant_data['reviews'] = reviews_data
+                if detail_logger:
+                    reviews_count = len(reviews_data.get('reviews', []))
+                    detail_logger.log_section_data(url, "REVIEWS", reviews_data, item_count=reviews_count)
         
         # ========== FAQs SECTION ==========
+        if detail_logger:
+            detail_logger.log_section_extraction(url, "FAQS", "STARTED")
         faqs_section = soup.select_one('section#faqs, [data-test="faqs-item"]')
         if faqs_section:
             faqs = []
@@ -1683,8 +1727,12 @@ class WebScraper:
             
             if faqs:
                 restaurant_data['faqs'] = faqs
+                if detail_logger:
+                    detail_logger.log_section_data(url, "FAQS", faqs, item_count=len(faqs))
         
         # ========== PHOTOS SECTION ==========
+        if detail_logger:
+            detail_logger.log_section_extraction(url, "PHOTOS", "STARTED")
         photos_section = soup.select_one('section#photos, [data-test="restaurant-photos"]')
         if photos_section:
             photo_count_elem = photos_section.select_one('h2')
@@ -1705,8 +1753,12 @@ class WebScraper:
                         photos.append(photo_url)
             if photos:
                 restaurant_data['photos'] = photos
+                if detail_logger:
+                    detail_logger.log_section_data(url, "PHOTOS", photos, item_count=len(photos))
         
         # ========== BOOKED TIMES INFO ==========
+        if detail_logger:
+            detail_logger.log_section_extraction(url, "BOOKING_INFO", "STARTED")
         booked_today = soup.select_one('[data-test="icSocialProof"]')
         if booked_today:
             booked_text = booked_today.find_next(string=re.compile('Booked'))
@@ -1726,9 +1778,42 @@ class WebScraper:
             if available_times:
                 restaurant_data['available_time_slots'] = available_times
         
+        # Log overview data
+        if detail_logger:
+            overview_fields = ['name', 'rating', 'review_count', 'price_range', 'cuisine', 'address', 'neighborhood']
+            overview_data = {k: restaurant_data.get(k) for k in overview_fields if restaurant_data.get(k)}
+            if overview_data:
+                detail_logger.log_section_data(url, "OVERVIEW", overview_data)
+        
         # Add source URL
         restaurant_data['url'] = url
         restaurant_data['source'] = 'opentable'
+        
+        if detail_logger:
+            detail_logger.log_section_extraction(url, "ALL_SECTIONS", "COMPLETE")
+            # Log summary of what was extracted
+            sections_found = []
+            if restaurant_data.get('name'):
+                sections_found.append('Overview')
+            if restaurant_data.get('details'):
+                sections_found.append('Details')
+            if restaurant_data.get('experiences'):
+                sections_found.append(f"Experiences ({len(restaurant_data['experiences'])})")
+            if restaurant_data.get('offers'):
+                sections_found.append(f"Offers ({len(restaurant_data['offers'])})")
+            if restaurant_data.get('popular_dishes'):
+                sections_found.append(f"Popular Dishes ({len(restaurant_data['popular_dishes'])})")
+            if restaurant_data.get('menu'):
+                sections_found.append('Menu')
+            if restaurant_data.get('reviews'):
+                sections_found.append('Reviews')
+            if restaurant_data.get('faqs'):
+                sections_found.append(f"FAQs ({len(restaurant_data['faqs'])})")
+            if restaurant_data.get('photos'):
+                sections_found.append(f"Photos ({len(restaurant_data['photos'])})")
+            
+            detail_logger.log_restaurant_processing(url, "PARSING_COMPLETE", 
+                f"Sections found: {', '.join(sections_found) if sections_found else 'None'}")
         
         return restaurant_data
     
@@ -1762,6 +1847,9 @@ class WebScraper:
             List of restaurant page URLs
         """
         logger.info(f"Extracting restaurant URLs from listing page: {listing_url}")
+        if detail_logger:
+            detail_logger.log_separator(f"EXTRACTING RESTAURANT URLS FROM LISTING")
+            detail_logger.log_url_visit(listing_url, status="EXTRACTING_URLS")
         
         # Scrape the listing page
         listing_data = await self.scrape(listing_url, use_javascript=use_javascript)
@@ -1985,6 +2073,10 @@ class WebScraper:
                 seen_urls.add(url)
         
         logger.info(f"Extracted {len(cleaned_urls)} restaurant URLs from listing page")
+        if detail_logger:
+            detail_logger.log_listing_urls_found(listing_url, cleaned_urls)
+            detail_logger.log_separator()
+        
         return cleaned_urls[:100]  # Limit to 100 URLs
 
     async def extract_from_individual_pages(
@@ -2032,16 +2124,26 @@ class WebScraper:
         
         async def extract_single_restaurant(restaurant_data: Dict, url: str) -> Dict[str, Any]:
             """Extract detailed data from a single restaurant page"""
+            start_time = time.time()
             try:
                 logger.info(f"Extracting detailed data from: {url}")
+                if detail_logger:
+                    detail_logger.log_separator(f"PROCESSING RESTAURANT PAGE")
+                    detail_logger.log_url_visit(url, status="STARTED")
+                    detail_logger.log_restaurant_processing(url, "INITIALIZED")
                 
                 # Check if this is an OpenTable URL - use specialized parser
                 is_opentable = 'opentable.com' in url.lower() and '/r/' in url.lower()
+                if detail_logger:
+                    detail_logger.log_restaurant_processing(url, "DETECTED_TYPE", 
+                        f"OpenTable: {is_opentable}")
                 
                 # Get HTML content for parsing
                 html_content = None
                 if use_javascript or is_opentable:
                     # For Playwright, get HTML directly
+                    if detail_logger:
+                        detail_logger.log_restaurant_processing(url, "FETCHING_HTML", "Using Playwright")
                     try:
                         from playwright.async_api import async_playwright
                         async with async_playwright() as p:
@@ -2053,21 +2155,35 @@ class WebScraper:
                             html_content = await page.content()
                             await context.close()
                             await browser.close()
+                        if detail_logger:
+                            detail_logger.log_restaurant_processing(url, "HTML_FETCHED", 
+                                f"Playwright - Length: {len(html_content):,} bytes")
                     except Exception as e:
                         logger.warning(f"Failed to get HTML with Playwright: {e}")
+                        if detail_logger:
+                            detail_logger.log_url_error(url, f"Playwright failed: {str(e)}")
                 
                 # Fallback: get HTML with httpx
                 if not html_content:
+                    if detail_logger:
+                        detail_logger.log_restaurant_processing(url, "FETCHING_HTML", "Using httpx (fallback)")
                     try:
                         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
                             response = await client.get(url, headers=self.session.headers)
                             response.raise_for_status()
                             html_content = response.text
+                        if detail_logger:
+                            detail_logger.log_restaurant_processing(url, "HTML_FETCHED", 
+                                f"httpx - Length: {len(html_content):,} bytes | Status: {response.status_code}")
                     except Exception as e:
                         logger.warning(f"Failed to get HTML with httpx: {e}")
+                        if detail_logger:
+                            detail_logger.log_url_error(url, f"httpx failed: {str(e)}")
                 
                 if not html_content:
                     logger.warning(f"Could not get HTML content from {url}")
+                    if detail_logger:
+                        detail_logger.log_url_error(url, "No HTML content retrieved")
                     return restaurant_data
                 
                 # Parse HTML
@@ -2076,11 +2192,19 @@ class WebScraper:
                 # Use OpenTable-specific parser if it's an OpenTable URL
                 if is_opentable:
                     logger.info("Using OpenTable-specific parser for detailed extraction")
+                    if detail_logger:
+                        detail_logger.log_restaurant_processing(url, "PARSING", "Using OpenTable parser")
                     opentable_data = self._parse_opentable_restaurant_page(soup, url, html_content)
                     # Merge with existing restaurant data
                     detailed_restaurant = restaurant_data.copy()
                     detailed_restaurant.update(opentable_data)
+                    
+                    duration = time.time() - start_time
                     logger.info(f"Successfully extracted OpenTable data for: {detailed_restaurant.get('name', 'Unknown')}")
+                    if detail_logger:
+                        detail_logger.log_data_summary(url, opentable_data)
+                        detail_logger.log_url_complete(url, html_length=len(html_content), duration=duration)
+                        detail_logger.log_separator()
                     return detailed_restaurant
                 
                 # For non-OpenTable pages, use general extraction
