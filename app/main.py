@@ -320,6 +320,31 @@ async def test_logging():
         }
 
 
+@app.get("/debug/listing-detection")
+async def debug_listing_detection(url: str = Query(..., description="URL to test")):
+    """Debug endpoint to test listing page detection"""
+    try:
+        from app.worker import ScraperWorker
+        worker = ScraperWorker()
+        is_listing = worker._is_restaurant_listing_page(url)
+        
+        return {
+            "url": url,
+            "is_listing_page": is_listing,
+            "detection_logic": {
+                "has_opentable": "opentable.com" in url.lower(),
+                "has_r_path": "/r/" in url.lower(),
+                "has_metro": "/metro/" in url.lower(),
+                "has_region": "/region/" in url.lower(),
+                "has_neighborhood": "/neighborhood/" in url.lower(),
+                "has_search": "/s?" in url.lower() or "/s?dateTime=" in url.lower(),
+            },
+            "recommendation": "Should extract individual pages" if is_listing else "Will scrape single page only"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 @app.get("/debug")
 async def debug_info():
     """Debug endpoint to check configuration and database connection"""

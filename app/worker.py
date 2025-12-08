@@ -218,9 +218,21 @@ class ScraperWorker:
         # Check if this is a restaurant listing page
         is_restaurant_listing = self._is_restaurant_listing_page(url)
         
+        # Debug logging for detection
+        logger.info(f"Listing page detection for {url}: {is_restaurant_listing}")
         if detail_logger:
             detail_logger.log_restaurant_processing(url, "PAGE_TYPE", 
                 f"Is listing page: {is_restaurant_listing}")
+            # Log detection details
+            url_lower = url.lower()
+            detection_details = {
+                "has_opentable": "opentable.com" in url_lower,
+                "has_r_path": "/r/" in url_lower,
+                "has_metro": "/metro/" in url_lower,
+                "has_region": "/region/" in url_lower,
+                "has_neighborhood": "/neighborhood/" in url_lower,
+            }
+            detail_logger.log_restaurant_processing(url, "DETECTION_DETAILS", str(detection_details))
         
         # DEFAULT BEHAVIOR: For restaurant listing pages, always extract from individual pages (unless explicitly disabled)
         if is_restaurant_listing and extract_individual_pages:
@@ -231,11 +243,20 @@ class ScraperWorker:
         
         # If individual page extraction is enabled, use the new process
         if extract_individual_pages and is_restaurant_listing:
+            if detail_logger:
+                detail_logger.log_separator(f"EXTRACTING RESTAURANT URLS FROM LISTING PAGE")
+                detail_logger.log_restaurant_processing(url, "LISTING_PAGE_DETECTED", 
+                    "Starting URL extraction and individual page visits")
             result = await self._process_restaurant_listing_with_individual_pages(url, use_javascript, errors)
             if detail_logger:
                 detail_logger.log_restaurant_processing(url, "PROCESSING_COMPLETE", 
-                    f"Extracted {len(result)} restaurants")
+                    f"Extracted {len(result)} restaurants from individual pages")
+                detail_logger.log_separator()
             return result
+        elif is_restaurant_listing and not extract_individual_pages:
+            if detail_logger:
+                detail_logger.log_warning(f"Listing page detected but individual page extraction is disabled", url)
+            logger.warning(f"Listing page detected but individual page extraction is disabled for {url}")
         
         # Check for special site handling
         if 'opentable.com' in url.lower():
@@ -281,10 +302,34 @@ class ScraperWorker:
         """Check if URL is a restaurant listing page"""
         url_lower = url.lower()
         
-        # Check URL patterns
+        # Special handling for OpenTable - check first before regex
+        if 'opentable.com' in url_lower:
+            # Individual restaurant pages have /r/ in the path
+            if '/r/' in url_lower:
+                logger.debug(f"OpenTable URL {url} is an individual restaurant page (has /r/)")
+                return False  # This is an individual restaurant page
+            
+            # OpenTable listing pages - check for specific patterns
+            listing_indicators = ['/metro/', '/region/', '/neighborhood/', '/s?', '/s?dateTime=']
+            for indicator in listing_indicators:
+                if indicator in url_lower:
+                    logger.debug(f"OpenTable URL {url} detected as listing page (has {indicator})")
+                    return True
+            
+            # If it's OpenTable but not a restaurant page and not excluded pages, it's likely a listing
+            excluded = ['/restaurant/', '/profile/', '/about', '/help', '/contact', '/terms', '/privacy', '/gift-cards']
+            if not any(excluded_page in url_lower for excluded_page in excluded):
+                # Additional check: if URL contains "restaurants" (plural), it's likely a listing
+                if 'restaurants' in url_lower:
+                    logger.debug(f"OpenTable URL {url} detected as listing page (contains 'restaurants')")
+                    return True
+                # Default: treat as listing if not excluded
+                logger.debug(f"OpenTable URL {url} detected as listing page (default for non-excluded pages)")
+                return True
+        
+        # Check URL patterns with regex for other sites
         listing_patterns = [
             'yelp.com/search',
-            'opentable.com/s',
             'tripadvisor.com/search',
             'google.com/search.*restaurant',
             'google.com/maps/search',

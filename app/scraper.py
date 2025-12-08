@@ -1977,10 +1977,11 @@ class WebScraper:
                     await page.goto(listing_url, wait_until="networkidle", timeout=30000)
                     await page.wait_for_timeout(3000)
                     
-                    # Extract URLs from JavaScript
+                    # Extract URLs from JavaScript - Enhanced for OpenTable
                     js_urls = await page.evaluate("""
                         () => {
                             const urls = [];
+                            const baseUrl = window.location.origin;
                             
                             // Find all restaurant links - improved for OpenTable
                             const linkSelectors = [
@@ -1988,30 +1989,72 @@ class WebScraper:
                                 'a[href*="/restaurant/"]',  // Generic
                                 'a[href*="/r/"]',  // OpenTable
                                 'a[href^="https://www.opentable.com/r/"]',  // OpenTable full URLs
+                                'a[href^="http://www.opentable.com/r/"]',  // OpenTable full URLs (http)
                                 'a[href^="/r/"]'  // OpenTable relative URLs
                             ];
                             
                             linkSelectors.forEach(selector => {
-                                const links = document.querySelectorAll(selector);
-                                links.forEach(link => {
-                                    const href = link.href || link.getAttribute('href');
-                                    if (href) {
-                                        // Normalize relative URLs
-                                        if (href.startsWith('/')) {
-                                            urls.push(window.location.origin + href);
-                                        } else if (href.startsWith('http')) {
-                                            urls.push(href);
+                                try {
+                                    const links = document.querySelectorAll(selector);
+                                    links.forEach(link => {
+                                        const href = link.href || link.getAttribute('href');
+                                        if (href) {
+                                            // Normalize relative URLs
+                                            if (href.startsWith('/')) {
+                                                urls.push(baseUrl + href);
+                                            } else if (href.startsWith('http')) {
+                                                urls.push(href);
+                                            }
+                                        }
+                                    });
+                                } catch (e) {
+                                    console.log('Error with selector ' + selector + ':', e);
+                                }
+                            });
+                            
+                            // For OpenTable metro/region pages, also look for restaurant cards
+                            if (window.location.href.includes('opentable.com')) {
+                                // Look for restaurant card links
+                                const restaurantCards = document.querySelectorAll('[data-test*="restaurant"], [data-testid*="restaurant"], .restaurant-card a, [class*="restaurantCard"] a');
+                                restaurantCards.forEach(card => {
+                                    const link = card.closest('a') || card.querySelector('a');
+                                    if (link) {
+                                        const href = link.href || link.getAttribute('href');
+                                        if (href && href.includes('/r/')) {
+                                            if (href.startsWith('/')) {
+                                                urls.push(baseUrl + href);
+                                            } else if (href.startsWith('http')) {
+                                                urls.push(href);
+                                            }
                                         }
                                     }
                                 });
-                            });
+                                
+                                // Look for restaurant names that are links
+                                const restaurantNameLinks = document.querySelectorAll('a h2, a h3, a[aria-label*="restaurant"]');
+                                restaurantNameLinks.forEach(elem => {
+                                    const link = elem.closest('a');
+                                    if (link) {
+                                        const href = link.href || link.getAttribute('href');
+                                        if (href && href.includes('/r/')) {
+                                            if (href.startsWith('/')) {
+                                                urls.push(baseUrl + href);
+                                            } else if (href.startsWith('http')) {
+                                                urls.push(href);
+                                            }
+                                        }
+                                    }
+                                });
+                            }
                             
                             // Also check for data in window variables
                             const windowVars = [
                                 window.__PRELOADED_STATE__,
                                 window.__NEXT_DATA__,
                                 window.pageData,
-                                window.initialData
+                                window.initialData,
+                                window.__INITIAL_STATE__,
+                                window.APP_STATE
                             ];
                             
                             windowVars.forEach(data => {
@@ -2020,14 +2063,22 @@ class WebScraper:
                                         const dataStr = JSON.stringify(data);
                                         // Match OpenTable restaurant URLs
                                         const urlPatterns = [
-                                            /https?:\\/\\/[^"\\s]*opentable\\.com\\/r\\/[^"\\s]+/g,
-                                            /https?:\\/\\/[^"\\s]+\\/(?:biz|restaurant|r)\\/[^"\\s]+/g
+                                            /https?:\\/\\/[^"\\s]*opentable\\.com\\/r\\/[^"\\s"\\?]+/g,
+                                            /https?:\\/\\/[^"\\s]+\\/(?:biz|restaurant|r)\\/[^"\\s"\\?]+/g,
+                                            /"url":\\s*"https?:\\/\\/[^"\\s]*opentable\\.com\\/r\\/[^"]+"/g,
+                                            /"href":\\s*"https?:\\/\\/[^"\\s]*opentable\\.com\\/r\\/[^"]+"/g
                                         ];
                                         
                                         urlPatterns.forEach(pattern => {
                                             const matches = dataStr.match(pattern);
                                             if (matches) {
-                                                urls.push(...matches);
+                                                matches.forEach(match => {
+                                                    // Extract URL from JSON string
+                                                    const urlMatch = match.match(/https?:\\/\\/[^"\\s]+/);
+                                                    if (urlMatch) {
+                                                        urls.push(urlMatch[0]);
+                                                    }
+                                                });
                                             }
                                         });
                                     } catch (e) {
@@ -2037,21 +2088,33 @@ class WebScraper:
                             });
                             
                             // Also check for data attributes
-                            const dataLinks = document.querySelectorAll('[data-url], [data-href], [data-restaurant-url]');
+                            const dataLinks = document.querySelectorAll('[data-url], [data-href], [data-restaurant-url], [data-test*="restaurant"] a');
                             dataLinks.forEach(elem => {
-                                const url = elem.getAttribute('data-url') || 
-                                           elem.getAttribute('data-href') || 
-                                           elem.getAttribute('data-restaurant-url');
-                                if (url && (url.includes('/r/') || url.includes('/biz/') || url.includes('/restaurant/'))) {
-                                    if (url.startsWith('/')) {
-                                        urls.push(window.location.origin + url);
-                                    } else if (url.startsWith('http')) {
-                                        urls.push(url);
+                                const link = elem.tagName === 'A' ? elem : elem.querySelector('a');
+                                if (link) {
+                                    const url = link.href || 
+                                               link.getAttribute('href') ||
+                                               elem.getAttribute('data-url') || 
+                                               elem.getAttribute('data-href') || 
+                                               elem.getAttribute('data-restaurant-url');
+                                    if (url && (url.includes('/r/') || url.includes('/biz/') || url.includes('/restaurant/'))) {
+                                        if (url.startsWith('/')) {
+                                            urls.push(baseUrl + url);
+                                        } else if (url.startsWith('http')) {
+                                            urls.push(url);
+                                        }
                                     }
                                 }
                             });
                             
-                            return [...new Set(urls)];
+                            // Remove duplicates and filter
+                            const uniqueUrls = [...new Set(urls)];
+                            return uniqueUrls.filter(url => {
+                                // Only keep valid restaurant URLs
+                                return url && 
+                                       url.startsWith('http') && 
+                                       (url.includes('/r/') || url.includes('/biz/') || url.includes('/restaurant/'));
+                            });
                         }
                     """)
                     
