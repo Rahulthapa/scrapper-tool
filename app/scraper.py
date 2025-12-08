@@ -1972,9 +1972,25 @@ class WebScraper:
                 from playwright.async_api import async_playwright
                 async with async_playwright() as p:
                     browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
-                    context = await browser.new_context()
+                    context = await browser.new_context(
+                        viewport={'width': 1920, 'height': 1080},
+                        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    )
                     page = await context.new_page()
-                    await page.goto(listing_url, wait_until="networkidle", timeout=30000)
+                    
+                    logger.info(f"Loading listing page with Playwright: {listing_url}")
+                    await page.goto(listing_url, wait_until="domcontentloaded", timeout=60000)
+                    
+                    # Wait for content to load - OpenTable uses dynamic loading
+                    await page.wait_for_timeout(5000)  # Wait 5 seconds for initial load
+                    
+                    # Scroll to load more content (OpenTable uses infinite scroll)
+                    logger.info("Scrolling to load restaurant content...")
+                    for i in range(3):  # Scroll 3 times
+                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                        await page.wait_for_timeout(2000)  # Wait 2 seconds between scrolls
+                    
+                    # Wait a bit more for lazy-loaded content
                     await page.wait_for_timeout(3000)
                     
                     # Extract URLs from JavaScript - Enhanced for OpenTable
@@ -2014,37 +2030,82 @@ class WebScraper:
                             
                             // For OpenTable metro/region pages, also look for restaurant cards
                             if (window.location.href.includes('opentable.com')) {
-                                // Look for restaurant card links
-                                const restaurantCards = document.querySelectorAll('[data-test*="restaurant"], [data-testid*="restaurant"], .restaurant-card a, [class*="restaurantCard"] a');
-                                restaurantCards.forEach(card => {
-                                    const link = card.closest('a') || card.querySelector('a');
-                                    if (link) {
-                                        const href = link.href || link.getAttribute('href');
-                                        if (href && href.includes('/r/')) {
-                                            if (href.startsWith('/')) {
-                                                urls.push(baseUrl + href);
-                                            } else if (href.startsWith('http')) {
-                                                urls.push(href);
+                                console.log('Looking for OpenTable restaurant URLs...');
+                                
+                                // Method 1: Look for restaurant card links - try multiple selectors
+                                const cardSelectors = [
+                                    '[data-test*="restaurant"]',
+                                    '[data-testid*="restaurant"]',
+                                    '.restaurant-card',
+                                    '[class*="restaurantCard"]',
+                                    '[class*="RestaurantCard"]',
+                                    'a[href*="/r/"]',  // Direct links
+                                    '[class*="restaurant-list"] a',
+                                    '[class*="restaurant-item"] a',
+                                    'article a[href*="/r/"]',
+                                    'div[class*="card"] a[href*="/r/"]'
+                                ];
+                                
+                                cardSelectors.forEach(selector => {
+                                    try {
+                                        const elements = document.querySelectorAll(selector);
+                                        console.log(`Found ${elements.length} elements with selector: ${selector}`);
+                                        elements.forEach(elem => {
+                                            const link = elem.tagName === 'A' ? elem : (elem.closest('a') || elem.querySelector('a'));
+                                            if (link) {
+                                                const href = link.href || link.getAttribute('href');
+                                                if (href && href.includes('/r/')) {
+                                                    let fullUrl = href;
+                                                    if (href.startsWith('/')) {
+                                                        fullUrl = baseUrl + href;
+                                                    }
+                                                    if (fullUrl.startsWith('http') && fullUrl.includes('/r/')) {
+                                                        urls.push(fullUrl);
+                                                    }
+                                                }
                                             }
-                                        }
+                                        });
+                                    } catch (e) {
+                                        console.log('Error with selector ' + selector + ':', e);
                                     }
                                 });
                                 
-                                // Look for restaurant names that are links
-                                const restaurantNameLinks = document.querySelectorAll('a h2, a h3, a[aria-label*="restaurant"]');
+                                // Method 2: Look for restaurant names that are links
+                                const restaurantNameLinks = document.querySelectorAll('a h2, a h3, a h4, a[aria-label*="restaurant"], a[aria-label*="Restaurant"]');
+                                console.log(`Found ${restaurantNameLinks.length} restaurant name links`);
                                 restaurantNameLinks.forEach(elem => {
                                     const link = elem.closest('a');
                                     if (link) {
                                         const href = link.href || link.getAttribute('href');
                                         if (href && href.includes('/r/')) {
+                                            let fullUrl = href;
                                             if (href.startsWith('/')) {
-                                                urls.push(baseUrl + href);
-                                            } else if (href.startsWith('http')) {
-                                                urls.push(href);
+                                                fullUrl = baseUrl + href;
+                                            }
+                                            if (fullUrl.startsWith('http')) {
+                                                urls.push(fullUrl);
                                             }
                                         }
                                     }
                                 });
+                                
+                                // Method 3: Find all links with /r/ pattern anywhere in the page
+                                const allLinks = document.querySelectorAll('a[href*="/r/"]');
+                                console.log(`Found ${allLinks.length} total links with /r/ pattern`);
+                                allLinks.forEach(link => {
+                                    const href = link.href || link.getAttribute('href');
+                                    if (href) {
+                                        let fullUrl = href;
+                                        if (href.startsWith('/')) {
+                                            fullUrl = baseUrl + href;
+                                        }
+                                        if (fullUrl.startsWith('http') && fullUrl.includes('/r/') && fullUrl.includes('opentable.com')) {
+                                            urls.push(fullUrl);
+                                        }
+                                    }
+                                });
+                                
+                                console.log(`Total URLs found so far: ${urls.length}`);
                             }
                             
                             // Also check for data in window variables
@@ -2118,22 +2179,45 @@ class WebScraper:
                         }
                     """)
                     
+                    logger.info(f"JavaScript extraction found {len(js_urls)} URLs")
+                    if detail_logger:
+                        detail_logger.log_debug(f"JS extraction found {len(js_urls)} URLs: {js_urls[:10]}...")
+                    
                     for url in js_urls:
                         if url and url not in seen_urls:
-                            restaurant_urls.append(url)
-                            seen_urls.add(url)
+                            # Ensure it's a valid restaurant URL (not the listing page itself)
+                            if '/r/' in url.lower() and url.lower() != listing_url.lower():
+                                restaurant_urls.append(url)
+                                seen_urls.add(url)
                     
                     await context.close()
                     await browser.close()
             except Exception as e:
-                logger.debug(f"JavaScript URL extraction failed: {e}")
+                logger.warning(f"JavaScript URL extraction failed: {e}")
+                if detail_logger:
+                    detail_logger.log_warning(f"JS extraction failed: {str(e)}", listing_url)
         
         # Clean and normalize URLs
         cleaned_urls = []
         for url in restaurant_urls:
+            if not url:
+                continue
+                
             # Remove fragments and common tracking params
             url = url.split('#')[0]
             url = re.sub(r'[?&](utm_[^&]*|ref=[^&]*|source=[^&]*)', '', url)
+            
+            # CRITICAL: Filter out the listing page URL itself
+            if url.lower() == listing_url.lower():
+                continue
+            
+            # For OpenTable, only keep URLs with /r/ (restaurant pages)
+            if 'opentable.com' in listing_url.lower():
+                if '/r/' not in url.lower():
+                    continue
+                # Ensure it's not a metro/region/neighborhood page
+                if any(pattern in url.lower() for pattern in ['/metro/', '/region/', '/neighborhood/', '/s?']):
+                    continue
             
             # Only keep valid restaurant URLs
             if url and url.startswith('http') and url not in seen_urls:
@@ -2143,7 +2227,12 @@ class WebScraper:
         logger.info(f"Extracted {len(cleaned_urls)} restaurant URLs from listing page")
         if detail_logger:
             detail_logger.log_listing_urls_found(listing_url, cleaned_urls)
+            if len(cleaned_urls) == 0:
+                detail_logger.log_warning(f"No restaurant URLs extracted! Only found listing page itself.", listing_url)
             detail_logger.log_separator()
+        
+        if len(cleaned_urls) == 0:
+            logger.warning(f"WARNING: No restaurant URLs extracted from {listing_url}. Only found the listing page itself.")
         
         return cleaned_urls[:100]  # Limit to 100 URLs
 

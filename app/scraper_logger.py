@@ -131,6 +131,10 @@ class ScraperLogger:
         else:
             self.logger.info("-" * 80)
     
+    def log_debug(self, message: str):
+        """Log a debug message"""
+        self.logger.debug(message)
+    
     def log_warning(self, message: str, url: Optional[str] = None):
         """Log a warning"""
         if url:
