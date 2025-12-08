@@ -2183,12 +2183,21 @@ class WebScraper:
                     if detail_logger:
                         detail_logger.log_debug(f"JS extraction found {len(js_urls)} URLs: {js_urls[:10]}...")
                     
+                    js_urls_added = 0
                     for url in js_urls:
-                        if url and url not in seen_urls:
-                            # Ensure it's a valid restaurant URL (not the listing page itself)
-                            if '/r/' in url.lower() and url.lower() != listing_url.lower():
-                                restaurant_urls.append(url)
-                                seen_urls.add(url)
+                        if not url:
+                            continue
+                        if url in seen_urls:
+                            continue
+                        # Ensure it's a valid restaurant URL (not the listing page itself)
+                        if '/r/' in url.lower() and url.lower() != listing_url.lower():
+                            restaurant_urls.append(url)
+                            seen_urls.add(url)
+                            js_urls_added += 1
+                    
+                    logger.info(f"Added {js_urls_added} URLs from JavaScript extraction to restaurant_urls (total: {len(restaurant_urls)})")
+                    if detail_logger:
+                        detail_logger.log_debug(f"Added {js_urls_added} URLs from JS extraction. Total restaurant_urls: {len(restaurant_urls)}")
                     
                     await context.close()
                     await browser.close()
@@ -2199,9 +2208,13 @@ class WebScraper:
         
         # Clean and normalize URLs
         cleaned_urls = []
+        cleaned_seen = set()  # Track cleaned URLs separately
         for url in restaurant_urls:
             if not url:
                 continue
+            
+            # Store original for comparison
+            original_url = url
                 
             # Remove fragments and common tracking params
             url = url.split('#')[0]
@@ -2209,30 +2222,38 @@ class WebScraper:
             
             # CRITICAL: Filter out the listing page URL itself
             if url.lower() == listing_url.lower():
+                logger.debug(f"Filtered out listing page URL: {url}")
                 continue
             
             # For OpenTable, only keep URLs with /r/ (restaurant pages)
             if 'opentable.com' in listing_url.lower():
                 if '/r/' not in url.lower():
+                    logger.debug(f"Filtered out (no /r/): {url}")
                     continue
                 # Ensure it's not a metro/region/neighborhood page
                 if any(pattern in url.lower() for pattern in ['/metro/', '/region/', '/neighborhood/', '/s?']):
+                    logger.debug(f"Filtered out (listing pattern): {url}")
                     continue
             
-            # Only keep valid restaurant URLs
-            if url and url.startswith('http') and url not in seen_urls:
+            # Only keep valid restaurant URLs (check cleaned_seen, not seen_urls)
+            if url and url.startswith('http') and url not in cleaned_seen:
                 cleaned_urls.append(url)
-                seen_urls.add(url)
+                cleaned_seen.add(url)
+                logger.debug(f"Added restaurant URL: {url}")
         
-        logger.info(f"Extracted {len(cleaned_urls)} restaurant URLs from listing page")
+        logger.info(f"Extracted {len(cleaned_urls)} restaurant URLs from listing page (from {len(restaurant_urls)} raw URLs)")
         if detail_logger:
             detail_logger.log_listing_urls_found(listing_url, cleaned_urls)
             if len(cleaned_urls) == 0:
-                detail_logger.log_warning(f"No restaurant URLs extracted! Only found listing page itself.", listing_url)
+                detail_logger.log_warning(f"No restaurant URLs extracted! Had {len(restaurant_urls)} raw URLs but all were filtered out.", listing_url)
+                if len(restaurant_urls) > 0:
+                    detail_logger.log_debug(f"Sample raw URLs that were filtered: {restaurant_urls[:5]}")
             detail_logger.log_separator()
         
         if len(cleaned_urls) == 0:
-            logger.warning(f"WARNING: No restaurant URLs extracted from {listing_url}. Only found the listing page itself.")
+            logger.warning(f"WARNING: No restaurant URLs extracted from {listing_url}. Had {len(restaurant_urls)} raw URLs but all were filtered out.")
+            if len(restaurant_urls) > 0:
+                logger.warning(f"Sample raw URLs: {restaurant_urls[:5]}")
         
         return cleaned_urls[:100]  # Limit to 100 URLs
 
@@ -2240,27 +2261,41 @@ class WebScraper:
         self,
         restaurants: List[Dict[str, Any]],
         use_javascript: bool = True,
-        max_concurrent: int = 5
+        max_concurrent: int = 10,
+        retry_failed: bool = True,
+        max_retries: int = 2
     ) -> List[Dict[str, Any]]:
         """
-        Extract detailed data from individual restaurant pages.
+        Extract detailed data from individual restaurant pages (Apify-style).
         Takes a list of restaurants (from listing pages) and visits each individual page
         to get complete data like full addresses, amenities, menu URLs, etc.
+        
+        Features:
+        - Concurrent processing with configurable limit
+        - Progress tracking
+        - Automatic retries for failed requests
+        - Comprehensive error handling
         
         Args:
             restaurants: List of restaurant dicts with at least 'url' or 'name'
             use_javascript: Whether to use Playwright for JS-rendered pages
-            max_concurrent: Maximum concurrent page requests
+            max_concurrent: Maximum concurrent page requests (default: 10)
+            retry_failed: Whether to retry failed requests
+            max_retries: Maximum number of retries per URL
         
         Returns:
             List of restaurants with merged data from listing + individual pages
         """
         import asyncio
+        import time
         
         if not restaurants:
             return []
         
-        logger.info(f"Extracting detailed data from {len(restaurants)} individual restaurant pages")
+        total = len(restaurants)
+        logger.info(f"🚀 Starting extraction from {total} individual restaurant pages (concurrency: {max_concurrent})")
+        if detail_logger:
+            detail_logger.log_info(f"Starting batch extraction: {total} pages, max_concurrent={max_concurrent}")
         
         # Extract URLs from restaurants
         restaurant_urls = []
@@ -2279,7 +2314,7 @@ class WebScraper:
         # Process restaurants in batches to avoid overwhelming the server
         detailed_restaurants = []
         
-        async def extract_single_restaurant(restaurant_data: Dict, url: str) -> Dict[str, Any]:
+        async def extract_single_restaurant(restaurant_data: Dict, url: str, index: int = 0) -> Dict[str, Any]:
             """Extract detailed data from a single restaurant page"""
             start_time = time.time()
             try:
@@ -2304,11 +2339,55 @@ class WebScraper:
                     try:
                         from playwright.async_api import async_playwright
                         async with async_playwright() as p:
-                            browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
-                            context = await browser.new_context()
+                            # Anti-detection: Use realistic browser settings
+                            browser = await p.chromium.launch(
+                                headless=True, 
+                                args=[
+                                    '--no-sandbox',
+                                    '--disable-blink-features=AutomationControlled',
+                                    '--disable-dev-shm-usage',
+                                    '--disable-setuid-sandbox',
+                                    '--no-first-run',
+                                    '--no-zygote',
+                                    '--disable-gpu'
+                                ]
+                            )
+                            
+                            # Anti-detection: Realistic browser context
+                            context = await browser.new_context(
+                                viewport={'width': 1920, 'height': 1080},
+                                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                                locale='en-US',
+                                timezone_id='America/New_York',
+                                permissions=['geolocation'],
+                                extra_http_headers={
+                                    'Accept-Language': 'en-US,en;q=0.9',
+                                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                                    'Accept-Encoding': 'gzip, deflate, br',
+                                    'Connection': 'keep-alive',
+                                    'Upgrade-Insecure-Requests': '1',
+                                }
+                            )
+                            
+                            # Anti-detection: Remove webdriver traces
                             page = await context.new_page()
-                            await page.goto(url, wait_until="networkidle", timeout=30000)
-                            await page.wait_for_timeout(3000)  # Wait for dynamic content
+                            await page.add_init_script("""
+                                Object.defineProperty(navigator, 'webdriver', {
+                                    get: () => undefined
+                                });
+                                window.chrome = {
+                                    runtime: {}
+                                };
+                            """)
+                            
+                            # Navigate with realistic delays
+                            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                            await page.wait_for_timeout(2000 + (index % 3) * 500)  # Randomize wait time
+                            
+                            # Scroll to trigger lazy loading
+                            await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+                            await page.wait_for_timeout(1000)
+                            
                             html_content = await page.content()
                             await context.close()
                             await browser.close()
@@ -2475,23 +2554,64 @@ class WebScraper:
                 # Return original restaurant data if extraction fails
                 return restaurant_data
         
-        # Process in batches with concurrency limit
+        # Process in batches with concurrency limit and progress tracking
         semaphore = asyncio.Semaphore(max_concurrent)
+        processed_count = {'value': 0}
+        failed_count = {'value': 0}
+        start_time = time.time()
         
-        async def extract_with_semaphore(restaurant_data, url):
+        async def extract_with_semaphore(restaurant_data, url, index):
             async with semaphore:
-                return await extract_single_restaurant(restaurant_data, url)
+                try:
+                    result = await extract_single_restaurant(restaurant_data, url, index)
+                    processed_count['value'] += 1
+                    current = processed_count['value']
+                    progress = (current / total) * 100
+                    elapsed = time.time() - start_time
+                    rate = current / elapsed if elapsed > 0 else 0
+                    remaining = (total - current) / rate if rate > 0 else 0
+                    
+                    logger.info(f"✅ [{current}/{total}] ({progress:.1f}%) | {url[:60]}... | Rate: {rate:.1f}/s | ETA: {remaining:.0f}s")
+                    if detail_logger:
+                        detail_logger.log_info(f"Progress: {current}/{total} ({progress:.1f}%) | Rate: {rate:.1f} pages/sec")
+                    return result
+                except Exception as e:
+                    failed_count['value'] += 1
+                    logger.error(f"❌ Failed [{index+1}/{total}]: {url} | Error: {str(e)[:100]}")
+                    if detail_logger:
+                        detail_logger.log_error(f"Failed to extract: {str(e)}", url, e)
+                    
+                    # Retry logic
+                    if retry_failed and max_retries > 0:
+                        for retry in range(max_retries):
+                            try:
+                                await asyncio.sleep(2 ** retry)  # Exponential backoff
+                                logger.info(f"🔄 Retry {retry+1}/{max_retries} for {url}")
+                                result = await extract_single_restaurant(restaurant_data, url, index)
+                                processed_count['value'] += 1
+                                failed_count['value'] -= 1
+                                logger.info(f"✅ Retry successful: {url}")
+                                return result
+                            except Exception as retry_error:
+                                logger.warning(f"Retry {retry+1} failed: {str(retry_error)[:100]}")
+                    
+                    # Return original data if all retries failed
+                    return restaurant_data
         
-        # Create tasks for all restaurants
-        tasks = [extract_with_semaphore(restaurant, url) for restaurant, url in restaurant_urls]
+        # Create tasks for all restaurants with index
+        tasks = [
+            extract_with_semaphore(restaurant, url, idx) 
+            for idx, (restaurant, url) in enumerate(restaurant_urls)
+        ]
         
         # Execute all tasks
+        logger.info(f"📊 Processing {len(tasks)} restaurant pages concurrently...")
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # Process results
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logger.error(f"Error processing restaurant {i}: {result}")
+                logger.error(f"Error processing restaurant {i+1}/{len(results)}: {result}")
                 # Keep original restaurant data
                 if i < len(restaurants):
                     detailed_restaurants.append(restaurants[i])
@@ -2504,7 +2624,22 @@ class WebScraper:
             if restaurant.get('name', '').lower() not in processed_names:
                 detailed_restaurants.append(restaurant)
         
-        logger.info(f"Completed detailed extraction for {len(detailed_restaurants)} restaurants")
+        total_time = time.time() - start_time
+        final_failed = failed_count['value']
+        success_count = len(detailed_restaurants) - final_failed
+        
+        logger.info(f"✅ Extraction complete!")
+        logger.info(f"   📊 Total: {total} | Success: {success_count} | Failed: {final_failed}")
+        if total_time > 0:
+            logger.info(f"   ⏱️  Time: {total_time:.1f}s | Rate: {success_count/total_time:.2f} pages/sec")
+        
+        if detail_logger:
+            detail_logger.log_separator(f"BATCH EXTRACTION COMPLETE")
+            detail_logger.log_info(f"Total: {total} | Success: {success_count} | Failed: {final_failed}")
+            if total_time > 0:
+                detail_logger.log_info(f"Time: {total_time:.1f}s | Rate: {success_count/total_time:.2f} pages/sec")
+            detail_logger.log_separator()
+        
         return detailed_restaurants
 
     def close(self):

@@ -393,7 +393,7 @@ class ScraperWorker:
             detailed_restaurants = await self.scraper.extract_from_individual_pages(
                 restaurants=restaurants_with_urls,
                 use_javascript=True,  # Always use JS for individual pages
-                max_concurrent=5
+                max_concurrent=10  # Increased concurrency for better performance (like Apify)
             )
             
             logger.info(f"Step 2 Complete: Extracted data from {len(detailed_restaurants)} individual pages")
