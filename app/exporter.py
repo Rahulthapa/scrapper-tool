@@ -11,7 +11,7 @@ class DataExporter:
         return json.dumps(data, indent=2, default=str)
 
     @staticmethod
-    def _flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: '_') -> Dict[str, Any]:
+    def _flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: str = '_') -> Dict[str, Any]:
         """
         Flatten nested dictionary structure for CSV export.
         Example: {'details': {'hours': '9-5'}} -> {'details_hours': '9-5'}
