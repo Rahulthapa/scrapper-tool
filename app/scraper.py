@@ -2606,23 +2606,55 @@ class WebScraper:
         
         # Execute all tasks
         logger.info(f"📊 Processing {len(tasks)} restaurant pages concurrently...")
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if detail_logger:
+            detail_logger.log_info(f"Starting concurrent processing of {len(tasks)} pages")
+        
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            logger.info(f"✅ All {len(results)} tasks completed")
+        except Exception as e:
+            logger.error(f"❌ Fatal error in batch processing: {str(e)}", exc_info=True)
+            if detail_logger:
+                detail_logger.log_error(f"Fatal error in batch processing: {str(e)}", None, e)
+            # Return what we have so far
+            results = []
         
         # Process results
+        logger.info(f"Processing {len(results)} results...")
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logger.error(f"Error processing restaurant {i+1}/{len(results)}: {result}")
-                # Keep original restaurant data
-                if i < len(restaurants):
+                logger.error(f"Error processing restaurant {i+1}/{len(results)}: {type(result).__name__}: {str(result)[:200]}")
+                if detail_logger:
+                    detail_logger.log_error(f"Exception in result {i+1}: {str(result)}", None, result)
+                # Keep original restaurant data if available
+                if i < len(restaurant_urls):
+                    restaurant_data, url = restaurant_urls[i]
+                    detailed_restaurants.append(restaurant_data)
+                elif i < len(restaurants):
                     detailed_restaurants.append(restaurants[i])
+            elif result:
+                # Only add non-empty results
+                if isinstance(result, dict) and result.get('url'):
+                    detailed_restaurants.append(result)
+                else:
+                    logger.warning(f"Result {i+1} is empty or invalid: {type(result)}")
             else:
-                detailed_restaurants.append(result)
+                logger.warning(f"Result {i+1} is None")
+                # Keep original restaurant data
+                if i < len(restaurant_urls):
+                    restaurant_data, url = restaurant_urls[i]
+                    detailed_restaurants.append(restaurant_data)
         
-        # Add restaurants that didn't have URLs
-        processed_names = {r.get('name', '').lower() for r in detailed_restaurants if r.get('name')}
-        for restaurant in restaurants:
-            if restaurant.get('name', '').lower() not in processed_names:
-                detailed_restaurants.append(restaurant)
+        # Add restaurants that didn't have URLs (but only if we have fewer results than expected)
+        if len(detailed_restaurants) < len(restaurants):
+            processed_urls = {r.get('url', '').lower() for r in detailed_restaurants if r.get('url')}
+            processed_names = {r.get('name', '').lower() for r in detailed_restaurants if r.get('name')}
+            for restaurant in restaurants:
+                # Only add if not already processed (by URL or name)
+                restaurant_url = restaurant.get('url', '').lower()
+                restaurant_name = restaurant.get('name', '').lower()
+                if restaurant_url not in processed_urls and restaurant_name not in processed_names:
+                    detailed_restaurants.append(restaurant)
         
         total_time = time.time() - start_time
         final_failed = failed_count['value']

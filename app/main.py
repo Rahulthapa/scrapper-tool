@@ -345,6 +345,63 @@ async def debug_listing_detection(url: str = Query(..., description="URL to test
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
+@app.get("/jobs/{job_id}/extracted-urls")
+async def get_extracted_urls(job_id: str):
+    """Get list of URLs extracted from a scraping job"""
+    try:
+        storage_instance = get_storage()
+        job = await storage_instance.get_job(job_id)
+        
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Get results for this job
+        results = await storage_instance.get_results(job_id)
+        
+        # Extract URLs from results
+        extracted_urls = []
+        if results:
+            for result in results:
+                if isinstance(result, dict):
+                    # Check if result has URL
+                    if 'url' in result:
+                        extracted_urls.append({
+                            'url': result['url'],
+                            'name': result.get('name', 'Unknown'),
+                            'source': result.get('source_listing_url')
+                        })
+                    # Check if result has restaurants array
+                    if 'restaurants' in result:
+                        for restaurant in result['restaurants']:
+                            if 'url' in restaurant:
+                                extracted_urls.append({
+                                    'url': restaurant['url'],
+                                    'name': restaurant.get('name', 'Unknown'),
+                                    'source': restaurant.get('source_listing_url')
+                                })
+                    # Check if result has metadata with extracted_urls
+                    if 'metadata' in result and 'extracted_urls' in result['metadata']:
+                        for url in result['metadata']['extracted_urls']:
+                            extracted_urls.append({
+                                'url': url if isinstance(url, str) else url.get('url', str(url)),
+                                'name': 'Unknown',
+                                'source': result['metadata'].get('source_listing_url')
+                            })
+        
+        return {
+            "job_id": job_id,
+            "job_url": job.get('url'),
+            "total_urls": len(extracted_urls),
+            "urls": extracted_urls,
+            "status": job.get('status')
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting extracted URLs: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 @app.get("/debug")
 async def debug_info():
     """Debug endpoint to check configuration and database connection"""

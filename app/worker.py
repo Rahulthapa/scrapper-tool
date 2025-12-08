@@ -377,7 +377,7 @@ class ScraperWorker:
             
             # STEP 2: Create minimal restaurant objects with just URLs
             restaurants_with_urls = [
-                {'url': url, 'source_listing_url': listing_url}
+                {'url': url, 'source_listing_url': listing_url, 'extracted_url': url}
                 for url in restaurant_urls
             ]
             
@@ -390,6 +390,7 @@ class ScraperWorker:
             except ImportError:
                 detail_logger = None
             
+            logger.info(f"About to call extract_from_individual_pages with {len(restaurants_with_urls)} restaurants")
             detailed_restaurants = await self.scraper.extract_from_individual_pages(
                 restaurants=restaurants_with_urls,
                 use_javascript=True,  # Always use JS for individual pages
@@ -397,8 +398,39 @@ class ScraperWorker:
             )
             
             logger.info(f"Step 2 Complete: Extracted data from {len(detailed_restaurants)} individual pages")
+            if len(detailed_restaurants) == 0:
+                logger.warning(f"⚠️ WARNING: No restaurants extracted! Expected {len(restaurants_with_urls)}")
+                # Return URLs even if scraping failed
+                return restaurants_with_urls
+            elif len(detailed_restaurants) < len(restaurants_with_urls):
+                logger.warning(f"⚠️ WARNING: Only extracted {len(detailed_restaurants)}/{len(restaurants_with_urls)} restaurants")
+                # Add missing URLs as entries with just URL (no data)
+                scraped_urls = {r.get('url', '').lower() for r in detailed_restaurants if r.get('url')}
+                for restaurant in restaurants_with_urls:
+                    if restaurant.get('url', '').lower() not in scraped_urls:
+                        # Add URL entry even if scraping failed
+                        detailed_restaurants.append({
+                            'url': restaurant.get('url'),
+                            'source_listing_url': listing_url,
+                            'extracted_url': restaurant.get('url'),
+                            'scraping_status': 'failed',
+                            'error': 'Could not extract data from this URL'
+                        })
             
-            # STEP 4: Return combined list
+            # Ensure all restaurants have URL field
+            for restaurant in detailed_restaurants:
+                if 'url' not in restaurant or not restaurant.get('url'):
+                    restaurant['url'] = restaurant.get('extracted_url') or restaurant.get('website') or 'N/A'
+                if 'source_listing_url' not in restaurant:
+                    restaurant['source_listing_url'] = listing_url
+            
+            # Log URLs
+            logger.info(f"📋 Extracted URLs ({len(restaurant_urls)} total):")
+            for idx, url in enumerate(restaurant_urls[:20], 1):
+                logger.info(f"   {idx}. {url}")
+            if len(restaurant_urls) > 20:
+                logger.info(f"   ... and {len(restaurant_urls) - 20} more URLs")
+            
             return detailed_restaurants
             
         except Exception as e:
