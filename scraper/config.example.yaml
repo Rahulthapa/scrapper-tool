@@ -1,0 +1,59 @@
+# Example Configuration File for Web Scraper
+# Copy this to config.yaml and customize as needed
+
+# Rate Limiting (seconds)
+delay_between_requests: 2.0
+delay_jitter: 0.5
+max_retries: 3
+retry_backoff_factor: 2.0
+request_timeout: 30
+
+# Browser Configuration
+headless: true
+browser_type: chromium  # chromium, firefox, webkit
+viewport_width: 1920
+viewport_height: 1080
+slow_mo: 0  # milliseconds
+
+# Location Configuration
+default_location: "Houston, TX"
+city: "Houston"
+state: "TX"
+
+# Scraping Limits
+max_results: 100
+max_pages_per_source: 50
+max_depth: 3
+
+# Enabled Data Sources
+enabled_sources:
+  - "Google Maps"
+  - "Yelp"
+  - "OpenTable"
+  - "Official Website"
+
+# Error Handling
+skip_on_captcha: true
+skip_on_403: true
+skip_on_429: true
+max_consecutive_errors: 5
+
+# Robots.txt
+respect_robots_txt: true
+robots_txt_cache_ttl: 3600  # seconds
+
+# Data Processing
+deduplicate: true
+merge_sources: true
+extract_json_ld: true
+extract_microdata: true
+extract_og_tags: true
+
+# Logging
+log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+log_file: "scraper.log"
+debug_mode: false
+
+# ID Generation
+id_hash_salt: ""  # Optional salt for ID generation
+

@@ -1,0 +1,15 @@
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+requests==2.31.0
+beautifulsoup4==4.12.3
+pydantic==2.5.3
+httpx>=0.25.2,<0.28.0
+pandas==2.2.0
+openpyxl==3.1.2
+playwright==1.41.0
+supabase==2.8.0
+python-dotenv==1.0.0
+python-dateutil==2.8.2
+# AI Providers (optional - enable the one you want to use)
+google-generativeai==0.8.3
+openai==1.55.0
