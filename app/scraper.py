@@ -14,8 +14,13 @@ logger = logging.getLogger(__name__)
 try:
     from app.scraper_logger import get_scraper_logger
     detail_logger = get_scraper_logger()
-except ImportError:
+    logger.info(f"Detailed scraper logger initialized: {detail_logger.log_file if detail_logger else 'None'}")
+except ImportError as e:
     # Fallback if logger not available
+    logger.warning(f"Detailed scraper logger not available: {e}")
+    detail_logger = None
+except Exception as e:
+    logger.error(f"Failed to initialize detailed scraper logger: {e}")
     detail_logger = None
 
 

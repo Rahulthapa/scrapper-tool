@@ -21,33 +21,67 @@ class ScraperWorker:
     async def process_job(self, job_id: str) -> None:
         """Process a scraping job"""
         logger.info(f"Starting to process job {job_id}")
+        
+        # Initialize detailed logger for this job
+        try:
+            from app.scraper_logger import get_scraper_logger
+            detail_logger = get_scraper_logger()
+            detail_logger.log_separator(f"PROCESSING JOB: {job_id}")
+        except Exception as e:
+            logger.warning(f"Could not initialize detailed logger: {e}")
+            detail_logger = None
+        
         errors = []
         
         try:
             # Update job status to running
             await self.storage.update_job(job_id, {'status': JobStatus.RUNNING.value})
+            if detail_logger:
+                detail_logger.log_restaurant_processing("", "JOB_STATUS", f"Status updated to RUNNING")
 
             # Get job details
             job = await self.storage.get_job(job_id)
             if not job:
                 raise Exception(f"Job {job_id} not found")
             
-            logger.info(f"Job: mode={'crawl' if job.get('crawl_mode') else 'single'}, url={job.get('url')}, query={job.get('search_query')}")
+            job_mode = 'crawl' if job.get('crawl_mode') else 'single'
+            job_url = job.get('url', '')
+            job_query = job.get('search_query', '')
+            
+            logger.info(f"Job: mode={job_mode}, url={job_url}, query={job_query}")
+            
+            if detail_logger:
+                detail_logger.log_restaurant_processing(job_url or "N/A", "JOB_INFO", 
+                    f"Mode: {job_mode}, URL: {job_url}, Query: {job_query}")
+                if job_url:
+                    detail_logger.log_url_visit(job_url, status="JOB_STARTED")
 
             filtered_data = []
             use_javascript = job.get('use_javascript', False)
 
             # Check if this is a crawl job or single URL job
+            if detail_logger:
+                if job.get('crawl_mode'):
+                    detail_logger.log_restaurant_processing(job_url or "N/A", "JOB_TYPE", "CRAWL MODE")
+                else:
+                    detail_logger.log_restaurant_processing(job_url or "N/A", "JOB_TYPE", "SINGLE URL MODE")
+            
             if job.get('crawl_mode'):
                 filtered_data = await self._process_crawl_job(job, errors)
             else:
                 filtered_data = await self._process_single_url_job(job, errors)
+            
+            if detail_logger:
+                detail_logger.log_restaurant_processing(job_url or "N/A", "JOB_COMPLETE", 
+                    f"Scraped {len(filtered_data)} items")
 
             # If no data scraped, report the errors
             if not filtered_data:
                 error_msg = "No data could be scraped. "
                 if errors:
                     error_msg += "Errors: " + "; ".join(errors[:3])  # First 3 errors
+                if detail_logger:
+                    detail_logger.log_warning(f"No data scraped. Errors: {error_msg}", job_url or "N/A")
                 else:
                     error_msg += "The target site may be blocking automated access."
                 
@@ -75,6 +109,17 @@ class ScraperWorker:
                 'completed_at': datetime.utcnow().isoformat()
             })
             logger.info(f"Job {job_id} completed with {len(filtered_data)} results")
+            
+            # Log completion to detailed logger
+            try:
+                from app.scraper_logger import get_scraper_logger
+                detail_logger = get_scraper_logger()
+                job_url_local = locals().get('job_url', 'N/A') if 'job_url' in locals() else 'N/A'
+                detail_logger.log_restaurant_processing(job_url_local, "JOB_FINAL_STATUS", 
+                    f"COMPLETED with {len(filtered_data)} results")
+                detail_logger.log_separator(f"JOB {job_id} COMPLETED")
+            except:
+                pass
 
         except Exception as e:
             error_msg = str(e)
@@ -82,6 +127,16 @@ class ScraperWorker:
                 error_msg += " | Additional errors: " + "; ".join(errors[:2])
             
             logger.error(f"Job {job_id} failed: {error_msg}", exc_info=True)
+            
+            # Log to detailed logger
+            try:
+                from app.scraper_logger import get_scraper_logger
+                detail_logger = get_scraper_logger()
+                job_url_local = locals().get('job_url', 'N/A') if 'job_url' in locals() else 'N/A'
+                detail_logger.log_error(f"Job {job_id} failed: {error_msg}", job_url_local, e)
+                detail_logger.log_separator(f"JOB {job_id} FAILED")
+            except:
+                pass
             
             try:
                 await self.storage.update_job(job_id, {
@@ -150,39 +205,76 @@ class ScraperWorker:
         
         logger.info(f"Scraping: {url} (JS: {use_javascript}, Individual Pages: {extract_individual_pages})")
         
+        # Log to detailed logger
+        try:
+            from app.scraper_logger import get_scraper_logger
+            detail_logger = get_scraper_logger()
+            detail_logger.log_separator(f"PROCESSING SINGLE URL: {url}")
+            detail_logger.log_restaurant_processing(url, "SCRAPING_START", 
+                f"JS: {use_javascript}, Individual Pages: {extract_individual_pages}")
+        except:
+            detail_logger = None
+        
         # Check if this is a restaurant listing page
         is_restaurant_listing = self._is_restaurant_listing_page(url)
+        
+        if detail_logger:
+            detail_logger.log_restaurant_processing(url, "PAGE_TYPE", 
+                f"Is listing page: {is_restaurant_listing}")
         
         # DEFAULT BEHAVIOR: For restaurant listing pages, always extract from individual pages (unless explicitly disabled)
         if is_restaurant_listing and extract_individual_pages:
             use_javascript = True  # Individual pages need JS
+            if detail_logger:
+                detail_logger.log_restaurant_processing(url, "PROCESSING_MODE", 
+                    "Using individual page extraction")
         
         # If individual page extraction is enabled, use the new process
         if extract_individual_pages and is_restaurant_listing:
-            return await self._process_restaurant_listing_with_individual_pages(url, use_javascript, errors)
+            result = await self._process_restaurant_listing_with_individual_pages(url, use_javascript, errors)
+            if detail_logger:
+                detail_logger.log_restaurant_processing(url, "PROCESSING_COMPLETE", 
+                    f"Extracted {len(result)} restaurants")
+            return result
         
         # Check for special site handling
         if 'opentable.com' in url.lower():
             use_javascript = True  # OpenTable always needs JS
             logger.info("Detected OpenTable - using JavaScript rendering")
+            if detail_logger:
+                detail_logger.log_restaurant_processing(url, "SITE_DETECTED", "OpenTable - using JS")
         
         try:
             # Try with JavaScript first if enabled
             if use_javascript:
                 try:
+                    if detail_logger:
+                        detail_logger.log_restaurant_processing(url, "SCRAPING_METHOD", "JavaScript (Playwright)")
                     data = await self.scraper.scrape(url, use_javascript=True)
+                    if detail_logger:
+                        detail_logger.log_restaurant_processing(url, "SCRAPING_SUCCESS", 
+                            f"Data keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
                     return [data]
                 except Exception as e:
                     errors.append(f"JS scrape failed: {str(e)[:100]}")
                     logger.warning(f"JavaScript scraping failed, trying static: {e}")
+                    if detail_logger:
+                        detail_logger.log_warning(f"JS scrape failed, trying static: {str(e)[:100]}", url)
             
             # Try static scraping
+            if detail_logger:
+                detail_logger.log_restaurant_processing(url, "SCRAPING_METHOD", "Static (httpx)")
             data = await self.scraper.scrape(url, use_javascript=False)
+            if detail_logger:
+                detail_logger.log_restaurant_processing(url, "SCRAPING_SUCCESS", 
+                    f"Data keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
             return [data]
             
         except Exception as e:
             errors.append(str(e)[:200])
             logger.error(f"Scraping failed for {url}: {e}")
+            if detail_logger:
+                detail_logger.log_error(f"Scraping failed: {str(e)}", url, e)
             return []
     
     def _is_restaurant_listing_page(self, url: str) -> bool:

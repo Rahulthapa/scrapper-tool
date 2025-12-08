@@ -259,6 +259,67 @@ async def tail_log_file(
         raise HTTPException(status_code=500, detail=f"Error reading log file: {str(e)}")
 
 
+@app.get("/logs/{filename}/content")
+async def get_log_content(filename: str):
+    """Get full content of a log file as JSON"""
+    log_dir = Path("scraper_logs")
+    log_file = log_dir / filename
+    
+    # Security: prevent directory traversal
+    if not log_file.resolve().is_relative_to(log_dir.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
+    if not log_file.exists():
+        raise HTTPException(status_code=404, detail="Log file not found")
+    
+    if not log_file.suffix == ".log":
+        raise HTTPException(status_code=400, detail="Invalid file type")
+    
+    try:
+        with open(log_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        stat = log_file.stat()
+        return {
+            "filename": filename,
+            "size": stat.st_size,
+            "total_lines": len(content.splitlines()),
+            "content": content
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading log file: {str(e)}")
+
+
+@app.get("/logs/test")
+async def test_logging():
+    """Test endpoint to verify logging is working"""
+    try:
+        from app.scraper_logger import get_scraper_logger
+        test_logger = get_scraper_logger()
+        
+        # Write a test log entry
+        test_logger.log_separator("TEST LOGGING")
+        test_logger.log_url_visit("https://test.example.com", status="TEST")
+        test_logger.log_section_extraction("https://test.example.com", "TEST_SECTION", "STARTED")
+        test_logger.log_section_data("https://test.example.com", "TEST_SECTION", {"test": "data"}, item_count=1)
+        test_logger.log_url_complete("https://test.example.com", html_length=1000, duration=1.5)
+        test_logger.log_separator()
+        
+        return {
+            "status": "success",
+            "message": "Test log entry written",
+            "log_file": test_logger.log_file,
+            "log_file_exists": Path(test_logger.log_file).exists(),
+            "log_file_size": Path(test_logger.log_file).stat().st_size if Path(test_logger.log_file).exists() else 0
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to test logging: {str(e)}",
+            "error_type": type(e).__name__
+        }
+
+
 @app.get("/debug")
 async def debug_info():
     """Debug endpoint to check configuration and database connection"""
