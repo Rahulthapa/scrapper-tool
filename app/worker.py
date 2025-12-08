@@ -99,8 +99,16 @@ class ScraperWorker:
             if job.get('ai_prompt') and filtered_data:
                 filtered_data = await self._apply_ai_filter(filtered_data, job['ai_prompt'], errors)
 
-            # Save results
+            # Save results - ensure each item is a dict with URL
             logger.info(f"Saving {len(filtered_data)} results for job {job_id}")
+            
+            # Debug: Log what we're saving
+            if filtered_data:
+                logger.info(f"Sample result structure: {list(filtered_data[0].keys())[:10] if isinstance(filtered_data[0], dict) else type(filtered_data[0])}")
+                # Count how many have URLs
+                urls_count = sum(1 for item in filtered_data if isinstance(item, dict) and item.get('url'))
+                logger.info(f"Results with URLs: {urls_count}/{len(filtered_data)}")
+            
             await self.storage.save_results(job_id, filtered_data)
 
             # Update job status to completed

@@ -2634,15 +2634,28 @@ class WebScraper:
                     detailed_restaurants.append(restaurants[i])
             elif result:
                 # Only add non-empty results
-                if isinstance(result, dict) and result.get('url'):
-                    detailed_restaurants.append(result)
+                if isinstance(result, dict):
+                    # Ensure URL is present
+                    if not result.get('url') and i < len(restaurant_urls):
+                        restaurant_data, url = restaurant_urls[i]
+                        result['url'] = url
+                    if result.get('url'):
+                        detailed_restaurants.append(result)
+                    else:
+                        logger.warning(f"Result {i+1} has no URL: {list(result.keys())[:5]}")
                 else:
-                    logger.warning(f"Result {i+1} is empty or invalid: {type(result)}")
+                    logger.warning(f"Result {i+1} is not a dict: {type(result)}")
+                    # Keep original restaurant data
+                    if i < len(restaurant_urls):
+                        restaurant_data, url = restaurant_urls[i]
+                        detailed_restaurants.append(restaurant_data)
             else:
-                logger.warning(f"Result {i+1} is None")
-                # Keep original restaurant data
+                logger.warning(f"Result {i+1} is None or empty")
+                # Keep original restaurant data with URL
                 if i < len(restaurant_urls):
                     restaurant_data, url = restaurant_urls[i]
+                    # Ensure URL is in the data
+                    restaurant_data['url'] = url
                     detailed_restaurants.append(restaurant_data)
         
         # Add restaurants that didn't have URLs (but only if we have fewer results than expected)

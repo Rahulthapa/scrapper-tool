@@ -44,6 +44,7 @@ class DataExporter:
         1. Ensure 'url' is always present and first
         2. Flatten nested structures
         3. Handle missing URLs
+        4. Handle nested restaurant lists
         """
         flattened_data = []
         
@@ -51,8 +52,26 @@ class DataExporter:
             if not isinstance(item, dict):
                 continue
             
+            # If item contains a 'restaurants' list, expand it
+            if 'restaurants' in item and isinstance(item['restaurants'], list):
+                for restaurant in item['restaurants']:
+                    if isinstance(restaurant, dict):
+                        # Ensure URL is present
+                        url = restaurant.get('url') or restaurant.get('website') or restaurant.get('yelp_url') or item.get('url') or 'N/A'
+                        restaurant['url'] = url
+                        # Flatten the dictionary
+                        flattened = DataExporter._flatten_dict(restaurant)
+                        # Ensure URL is the first key
+                        if 'url' in flattened:
+                            url_value = flattened.pop('url')
+                            flattened = {'url': url_value, **flattened}
+                        else:
+                            flattened = {'url': url, **flattened}
+                        flattened_data.append(flattened)
+                continue
+            
             # Ensure URL is present
-            url = item.get('url') or item.get('website') or item.get('yelp_url') or 'N/A'
+            url = item.get('url') or item.get('website') or item.get('yelp_url') or item.get('extracted_url') or 'N/A'
             
             # Flatten the dictionary
             flattened = DataExporter._flatten_dict(item)

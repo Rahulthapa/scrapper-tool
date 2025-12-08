@@ -1510,8 +1510,44 @@ async def export_job_results(
     results = await storage_instance.get_results(job_id)
     data = [result.get('data', result) for result in results]
     
+    # Debug logging
+    logger.info(f"Exporting {len(data)} results for job {job_id}")
+    if data:
+        # Check structure
+        first_item = data[0] if isinstance(data[0], dict) else {}
+        logger.info(f"First item keys: {list(first_item.keys())[:10] if isinstance(first_item, dict) else 'Not a dict'}")
+        # Count URLs
+        urls_count = sum(1 for item in data if isinstance(item, dict) and item.get('url'))
+        logger.info(f"Items with URLs in export: {urls_count}/{len(data)}")
+    
     if not data:
         raise HTTPException(status_code=404, detail="No results found for this job")
+    
+    # Flatten if data contains nested structures (e.g., if results are wrapped)
+    flattened_data = []
+    for item in data:
+        if isinstance(item, dict):
+            # If item has 'restaurants' key, expand it
+            if 'restaurants' in item and isinstance(item['restaurants'], list):
+                for restaurant in item['restaurants']:
+                    if isinstance(restaurant, dict):
+                        flattened_data.append(restaurant)
+            # If item has 'data' key (double nested), use that
+            elif 'data' in item:
+                if isinstance(item['data'], list):
+                    flattened_data.extend(item['data'])
+                else:
+                    flattened_data.append(item['data'])
+            # Otherwise, add item as-is
+            else:
+                flattened_data.append(item)
+        else:
+            flattened_data.append(item)
+    
+    # Use flattened data if we found nested structures
+    if len(flattened_data) > len(data):
+        logger.info(f"Flattened {len(data)} results into {len(flattened_data)} items")
+        data = flattened_data
     
     # Export based on format
     if format == "json":
