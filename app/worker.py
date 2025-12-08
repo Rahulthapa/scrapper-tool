@@ -20,6 +20,8 @@ class ScraperWorker:
 
     async def process_job(self, job_id: str) -> None:
         """Process a scraping job"""
+        # Store job_id for incremental saving
+        self.current_job_id = job_id
         logger.info(f"Starting to process job {job_id}")
         
         # Initialize detailed logger for this job
@@ -272,8 +274,17 @@ class ScraperWorker:
             if detail_logger:
                 detail_logger.log_separator(f"EXTRACTING RESTAURANT URLS FROM LISTING PAGE")
                 detail_logger.log_restaurant_processing(url, "LISTING_PAGE_DETECTED", 
-                    "Starting URL extraction and individual page visits")
-            result = await self._process_restaurant_listing_with_individual_pages(url, use_javascript, errors)
+                    "Starting URL extraction - will skip listing page and scrape first extracted URL only")
+            
+            # Extract URLs and scrape only the first one (skip listing page)
+            result = await self._process_restaurant_listing_with_individual_pages(
+                listing_url=url, 
+                use_javascript=use_javascript, 
+                errors=errors,
+                skip_listing_page=True,  # Skip scraping the listing page itself
+                max_restaurants=1  # Only scrape first extracted URL
+            )
+            
             if detail_logger:
                 detail_logger.log_restaurant_processing(url, "PROCESSING_COMPLETE", 
                     f"Extracted {len(result)} restaurants from individual pages")
@@ -374,7 +385,9 @@ class ScraperWorker:
         self,
         listing_url: str,
         use_javascript: bool,
-        errors: List[str]
+        errors: List[str],
+        skip_listing_page: bool = False,
+        max_restaurants: int = None
     ) -> List[Dict]:
         """
         NEW DEFAULT PROCESS for restaurant listing pages:
@@ -394,14 +407,28 @@ class ScraperWorker:
             )
             
             if not restaurant_urls:
-                logger.warning("No restaurant URLs found in listing page, falling back to regular scraping")
-                # Fallback to regular scraping
+                logger.warning("No restaurant URLs found in listing page")
+                if skip_listing_page:
+                    # If skipping listing page and no URLs found, return empty
+                    return []
+                # Fallback to regular scraping if not skipping
                 data = await self.scraper.scrape(listing_url, use_javascript=use_javascript)
                 return [data]
             
             logger.info(f"Step 1 Complete: Found {len(restaurant_urls)} restaurant URLs")
             
-            # STEP 2: Create minimal restaurant objects with just URLs
+            if skip_listing_page:
+                logger.info(f"⏭️ SKIPPING listing page scraping - will only scrape extracted restaurant URLs")
+            
+            # STEP 2: Limit to max_restaurants if specified (for testing - scrape only first N)
+            if max_restaurants and max_restaurants > 0:
+                logger.info(f"⚠️ TEST MODE: Limiting to {max_restaurants} restaurants (out of {len(restaurant_urls)} found)")
+                restaurant_urls = restaurant_urls[:max_restaurants]
+                if restaurant_urls:
+                    logger.info(f"📋 First URL to scrape: {restaurant_urls[0]}")
+            
+            # STEP 3: Create minimal restaurant objects with just URLs
+            
             restaurants_with_urls = [
                 {'url': url, 'source_listing_url': listing_url, 'extracted_url': url}
                 for url in restaurant_urls
@@ -417,10 +444,15 @@ class ScraperWorker:
                 detail_logger = None
             
             logger.info(f"About to call extract_from_individual_pages with {len(restaurants_with_urls)} restaurants")
+            
+            # Use sequential processing (1 at a time) to avoid resource exhaustion
+            # This is more reliable and allows incremental saving
             detailed_restaurants = await self.scraper.extract_from_individual_pages(
                 restaurants=restaurants_with_urls,
                 use_javascript=True,  # Always use JS for individual pages
-                max_concurrent=10  # Increased concurrency for better performance (like Apify)
+                max_concurrent=1,  # Sequential processing - one browser at a time
+                save_incrementally=True,  # Save results as we go
+                job_id=self.current_job_id if hasattr(self, 'current_job_id') else None
             )
             
             logger.info(f"Step 2 Complete: Extracted data from {len(detailed_restaurants)} individual pages")

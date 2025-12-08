@@ -1143,6 +1143,10 @@ async def create_job(job_request: ScrapeJobCreate, background_tasks: BackgroundT
         if job_request.extract_individual_pages:
             job_data['extract_individual_pages'] = True
         
+        # Add max_restaurants limit (for testing - scrape only first N restaurants)
+        if hasattr(job_request, 'max_restaurants') and job_request.max_restaurants:
+            job_data['max_restaurants'] = job_request.max_restaurants
+        
         # Validate: need either URL or search_query
         if not job_data.get('url') and not job_data.get('search_query'):
             raise HTTPException(

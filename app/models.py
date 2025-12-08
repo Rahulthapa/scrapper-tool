@@ -23,6 +23,7 @@ class ScrapeJobCreate(BaseModel):
     export_format: Optional[str] = "json"
     use_javascript: Optional[bool] = False  # Use Playwright for JS-rendered pages
     extract_individual_pages: Optional[bool] = True  # Extract from individual restaurant pages (for listing pages) - DEFAULT: enabled
+    max_restaurants: Optional[int] = None  # Limit number of restaurants to scrape (for testing). None = all
 
 
 class ParseHTMLRequest(BaseModel):

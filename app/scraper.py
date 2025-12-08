@@ -2261,9 +2261,11 @@ class WebScraper:
         self,
         restaurants: List[Dict[str, Any]],
         use_javascript: bool = True,
-        max_concurrent: int = 10,
+        max_concurrent: int = 1,  # Default to sequential (1 at a time)
         retry_failed: bool = True,
-        max_retries: int = 2
+        max_retries: int = 2,
+        save_incrementally: bool = False,
+        job_id: str = None
     ) -> List[Dict[str, Any]]:
         """
         Extract detailed data from individual restaurant pages (Apify-style).
@@ -2574,6 +2576,20 @@ class WebScraper:
                     logger.info(f"✅ [{current}/{total}] ({progress:.1f}%) | {url[:60]}... | Rate: {rate:.1f}/s | ETA: {remaining:.0f}s")
                     if detail_logger:
                         detail_logger.log_info(f"Progress: {current}/{total} ({progress:.1f}%) | Rate: {rate:.1f} pages/sec")
+                    
+                    # Incremental saving: save result immediately if enabled
+                    if save_incrementally and job_id and result and isinstance(result, dict):
+                        try:
+                            from app.storage import Storage
+                            storage = Storage()
+                            # Ensure URL is in result
+                            if not result.get('url'):
+                                result['url'] = url
+                            await storage.save_results(job_id, [result])
+                            logger.info(f"💾 Incrementally saved result {current}/{total} for {url[:50]}...")
+                        except Exception as save_error:
+                            logger.warning(f"Failed to save incrementally: {save_error}")
+                    
                     return result
                 except Exception as e:
                     failed_count['value'] += 1
