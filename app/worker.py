@@ -420,7 +420,7 @@ class ScraperWorker:
             if skip_listing_page:
                 logger.info(f"⏭️ SKIPPING listing page scraping - will only scrape extracted restaurant URLs")
             
-            # STEP 2: Skip first extracted URL and start from second (for testing)
+            # STEP 2: Skip first extracted URL and start from second (when skip_listing_page is True)
             if skip_listing_page and len(restaurant_urls) > 1:
                 skipped_url = restaurant_urls[0]
                 restaurant_urls = restaurant_urls[1:]  # Skip first, start from second
