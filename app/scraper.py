@@ -2730,13 +2730,13 @@ class WebScraper:
                     if result.get('url'):
                         detailed_restaurants.append(result)
                         logger.info(f"✅ Added result {i+1} to detailed_restaurants (total: {len(detailed_restaurants)})")
-            else:
+                    else:
                         logger.warning(f"⚠️ Result {i+1} has no URL: {result_keys[:10]}")
                         # Still add it with URL from restaurant_urls
                         if i < len(restaurant_urls):
                             restaurant_data, url = restaurant_urls[i]
                             result['url'] = url
-                detailed_restaurants.append(result)
+                            detailed_restaurants.append(result)
                             logger.info(f"✅ Added result {i+1} with URL from restaurant_urls")
                 else:
                     logger.warning(f"Result {i+1} is not a dict: {type(result)}")
