@@ -2429,21 +2429,43 @@ class WebScraper:
                 
                 # Use OpenTable-specific parser if it's an OpenTable URL
                 if is_opentable:
-                    logger.info("Using OpenTable-specific parser for detailed extraction")
+                    logger.info(f"Using OpenTable-specific parser for detailed extraction: {url}")
                     if detail_logger:
                         detail_logger.log_restaurant_processing(url, "PARSING", "Using OpenTable parser")
-                    opentable_data = self._parse_opentable_restaurant_page(soup, url, html_content)
-                    # Merge with existing restaurant data
-                    detailed_restaurant = restaurant_data.copy()
-                    detailed_restaurant.update(opentable_data)
-                    
-                    duration = time.time() - start_time
-                    logger.info(f"Successfully extracted OpenTable data for: {detailed_restaurant.get('name', 'Unknown')}")
-                    if detail_logger:
-                        detail_logger.log_data_summary(url, opentable_data)
-                        detail_logger.log_url_complete(url, html_length=len(html_content), duration=duration)
-                        detail_logger.log_separator()
-                    return detailed_restaurant
+                    try:
+                        opentable_data = self._parse_opentable_restaurant_page(soup, url, html_content)
+                        logger.info(f"OpenTable parser returned {len(opentable_data)} data fields")
+                        
+                        # Merge with existing restaurant data
+                        detailed_restaurant = restaurant_data.copy()
+                        detailed_restaurant.update(opentable_data)
+                        
+                        # CRITICAL: Ensure URL is always in the result
+                        if 'url' not in detailed_restaurant or not detailed_restaurant.get('url'):
+                            detailed_restaurant['url'] = url
+                        
+                        # Log what we extracted
+                        extracted_fields = [k for k in detailed_restaurant.keys() if detailed_restaurant.get(k)]
+                        logger.info(f"✅ Extracted {len(extracted_fields)} fields: {', '.join(extracted_fields[:10])}")
+                        logger.info(f"✅ Restaurant name: {detailed_restaurant.get('name', 'N/A')}")
+                        logger.info(f"✅ Restaurant URL: {detailed_restaurant.get('url', 'N/A')}")
+                        
+                        duration = time.time() - start_time
+                        logger.info(f"Successfully extracted OpenTable data for: {detailed_restaurant.get('name', 'Unknown')}")
+                        if detail_logger:
+                            detail_logger.log_data_summary(url, opentable_data)
+                            detail_logger.log_url_complete(url, html_length=len(html_content), duration=duration)
+                            detail_logger.log_separator()
+                        
+                        return detailed_restaurant
+                    except Exception as parse_error:
+                        logger.error(f"❌ OpenTable parser failed for {url}: {str(parse_error)}", exc_info=True)
+                        if detail_logger:
+                            detail_logger.log_error(f"OpenTable parser failed: {str(parse_error)}", url, parse_error)
+                        # Return restaurant data with URL at least
+                        restaurant_data['url'] = url
+                        restaurant_data['parsing_error'] = str(parse_error)
+                        return restaurant_data
                 
                 # For non-OpenTable pages, use general extraction
                 # Scrape the page for structured data
@@ -2552,8 +2574,13 @@ class WebScraper:
                 return detailed_restaurant
                 
             except Exception as e:
-                logger.error(f"Failed to extract detailed data from {url}: {str(e)}")
-                # Return original restaurant data if extraction fails
+                logger.error(f"❌ Failed to extract detailed data from {url}: {str(e)}", exc_info=True)
+                if detail_logger:
+                    detail_logger.log_error(f"Extraction failed: {str(e)}", url, e)
+                # Return original restaurant data with URL at least
+                restaurant_data['url'] = url
+                restaurant_data['extraction_error'] = str(e)
+                logger.warning(f"⚠️ Returning restaurant data with URL only: {url}")
                 return restaurant_data
         
         # Process in batches with concurrency limit and progress tracking
@@ -2655,10 +2682,24 @@ class WebScraper:
                     if not result.get('url') and i < len(restaurant_urls):
                         restaurant_data, url = restaurant_urls[i]
                         result['url'] = url
+                    
+                    # Log what we're adding
+                    result_url = result.get('url', 'NO_URL')
+                    result_name = result.get('name', 'NO_NAME')
+                    result_keys = list(result.keys())
+                    logger.info(f"📝 Result {i+1}: URL={result_url[:50]}... | Name={result_name[:30]} | Keys={len(result_keys)}")
+                    
                     if result.get('url'):
                         detailed_restaurants.append(result)
+                        logger.info(f"✅ Added result {i+1} to detailed_restaurants (total: {len(detailed_restaurants)})")
                     else:
-                        logger.warning(f"Result {i+1} has no URL: {list(result.keys())[:5]}")
+                        logger.warning(f"⚠️ Result {i+1} has no URL: {result_keys[:10]}")
+                        # Still add it with URL from restaurant_urls
+                        if i < len(restaurant_urls):
+                            restaurant_data, url = restaurant_urls[i]
+                            result['url'] = url
+                            detailed_restaurants.append(result)
+                            logger.info(f"✅ Added result {i+1} with URL from restaurant_urls")
                 else:
                     logger.warning(f"Result {i+1} is not a dict: {type(result)}")
                     # Keep original restaurant data
