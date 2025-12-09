@@ -1950,9 +1950,9 @@ class WebScraper:
             for link in opentable_links:
                 href = link.get('href', '')
                 if href:
-                # Normalize URL
-                if href.startswith('/'):
-                    href = urljoin(listing_url, href)
+                    # Normalize URL
+                    if href.startswith('/'):
+                        href = urljoin(listing_url, href)
                     elif not href.startswith('http'):
                         continue
                     
@@ -1964,7 +1964,7 @@ class WebScraper:
                         if clean_url not in seen_urls:
                             restaurant_urls.append(clean_url)
                             seen_urls.add(clean_url)
-                    seen_urls.add(href)
+                            seen_urls.add(href)
         
         # Method 3: Extract from JavaScript variables (if available)
         if use_javascript:
