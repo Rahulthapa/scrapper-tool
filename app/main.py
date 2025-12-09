@@ -1726,19 +1726,38 @@ async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
         storage_instance = get_storage()
         worker_instance = get_worker()
         
+        # Initialize detail logger
+        try:
+            from app.scraper_logger import get_scraper_logger
+            detail_logger = get_scraper_logger()
+        except:
+            detail_logger = None
+        
+        if detail_logger:
+            detail_logger.log_separator(f"SCRAPING SINGLE URL: {request.url}")
+            detail_logger.log_url_visit(request.url, status="STARTING")
+            detail_logger.log_restaurant_processing(request.url, "SCRAPE_START", f"Job ID: {job_id}")
+        
         # Check if job exists
         job = await storage_instance.get_job(job_id)
         if not job:
-            raise HTTPException(status_code=404, detail="Job not found")
+            error_msg = "Job not found"
+            if detail_logger:
+                detail_logger.log_error(error_msg, request.url)
+            raise HTTPException(status_code=404, detail=error_msg)
         
         # Check if URL exists in extracted URLs
         url_status = await storage_instance.get_url_status(job_id, request.url)
         if not url_status:
-            raise HTTPException(status_code=404, detail="URL not found in extracted URLs for this job")
+            error_msg = "URL not found in extracted URLs for this job"
+            if detail_logger:
+                detail_logger.log_error(error_msg, request.url)
+            raise HTTPException(status_code=404, detail=error_msg)
         
         # Check if already scraped
         if url_status.get('status') == 'scraped':
-            # Return existing data
+            if detail_logger:
+                detail_logger.log_restaurant_processing(request.url, "ALREADY_SCRAPED", "Returning cached data")
             return ScrapeUrlResponse(
                 url=request.url,
                 status='scraped',
@@ -1747,20 +1766,34 @@ async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
         
         # Update status to scraping
         await storage_instance.update_url_status(job_id, request.url, 'scraping')
+        if detail_logger:
+            detail_logger.log_restaurant_processing(request.url, "STATUS_UPDATE", "Status changed to scraping")
         
         try:
+            if detail_logger:
+                detail_logger.log_restaurant_processing(request.url, "SCRAPING", "Starting scrape with Playwright")
+            
             # Scrape the URL
             scraped_data = await worker_instance.scraper.scrape(
                 request.url,
                 use_javascript=True  # Always use JS for restaurant pages
             )
             
+            if detail_logger:
+                detail_logger.log_restaurant_processing(request.url, "SCRAPE_SUCCESS", 
+                    f"Scraped {len(str(scraped_data))} bytes of data")
+            
             # Parse with OpenTable parser if applicable
             if 'opentable.com' in request.url.lower() and '/r/' in request.url.lower():
+                if detail_logger:
+                    detail_logger.log_restaurant_processing(request.url, "PARSING", "Using OpenTable parser")
                 scraped_data = await worker_instance.scraper._parse_opentable_restaurant_page(
                     scraped_data.get('text_content', ''),
                     request.url
                 )
+                if detail_logger:
+                    detail_logger.log_restaurant_processing(request.url, "PARSE_SUCCESS", 
+                        f"Parsed {len(scraped_data)} data fields")
             
             # Update status to scraped and save data
             await storage_instance.update_url_status(
@@ -1770,6 +1803,10 @@ async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
                 data=scraped_data
             )
             
+            if detail_logger:
+                detail_logger.log_restaurant_processing(request.url, "SAVED", "Data saved to database")
+                detail_logger.log_url_complete(request.url, html_length=len(str(scraped_data)))
+            
             return ScrapeUrlResponse(
                 url=request.url,
                 status='scraped',
@@ -1777,8 +1814,19 @@ async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
             )
             
         except Exception as scrape_error:
-            # Update status to failed
+            # Log full error with traceback
+            import traceback
+            error_traceback = traceback.format_exc()
             error_msg = str(scrape_error)
+            
+            logger.error(f"Scraping failed for {request.url}: {error_msg}")
+            logger.error(f"Full traceback:\n{error_traceback}")
+            
+            if detail_logger:
+                detail_logger.log_error(f"Scraping failed: {error_msg}", request.url, scrape_error)
+                detail_logger.logger.debug(f"[ERROR TRACEBACK]\n{error_traceback}")
+            
+            # Update status to failed
             await storage_instance.update_url_status(
                 job_id,
                 request.url,
@@ -1795,7 +1843,13 @@ async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        error_traceback = traceback.format_exc()
         logger.error(f"Error scraping URL: {str(e)}")
+        logger.error(f"Full traceback:\n{error_traceback}")
+        if detail_logger:
+            detail_logger.log_error(f"Unexpected error: {str(e)}", request.url, e)
+            detail_logger.logger.debug(f"[ERROR TRACEBACK]\n{error_traceback}")
         raise HTTPException(status_code=500, detail=f"Failed to scrape URL: {str(e)}")
 
 
@@ -1806,6 +1860,17 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
         storage_instance = get_storage()
         worker_instance = get_worker()
         
+        # Initialize detail logger
+        try:
+            from app.scraper_logger import get_scraper_logger
+            detail_logger = get_scraper_logger()
+        except:
+            detail_logger = None
+        
+        if detail_logger:
+            detail_logger.log_separator(f"BULK SCRAPING: {len(request.urls)} URLs")
+            detail_logger.log_info(f"Starting bulk scrape for job {job_id}")
+        
         # Check if job exists
         job = await storage_instance.get_job(job_id)
         if not job:
@@ -1815,20 +1880,28 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
         failed = []
         
         # Process URLs sequentially (one at a time for memory efficiency)
-        for url in request.urls:
+        for idx, url in enumerate(request.urls, 1):
             try:
+                if detail_logger:
+                    detail_logger.log_separator(f"SCRAPING URL {idx}/{len(request.urls)}: {url}")
+                
                 # Check if URL exists
                 url_status = await storage_instance.get_url_status(job_id, url)
                 if not url_status:
+                    error_msg = "URL not found in extracted URLs"
                     failed.append(ScrapeUrlResponse(
                         url=url,
                         status='failed',
-                        error_message="URL not found in extracted URLs"
+                        error_message=error_msg
                     ))
+                    if detail_logger:
+                        detail_logger.log_error(error_msg, url)
                     continue
                 
                 # Skip if already scraped
                 if url_status.get('status') == 'scraped':
+                    if detail_logger:
+                        detail_logger.log_restaurant_processing(url, "SKIPPED", "Already scraped")
                     scraped.append(ScrapeUrlResponse(
                         url=url,
                         status='scraped',
@@ -1838,6 +1911,8 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
                 
                 # Update to scraping
                 await storage_instance.update_url_status(job_id, url, 'scraping')
+                if detail_logger:
+                    detail_logger.log_restaurant_processing(url, "SCRAPING", f"URL {idx}/{len(request.urls)}")
                 
                 # Scrape the URL
                 scraped_data = await worker_instance.scraper.scrape(
@@ -1860,6 +1935,9 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
                     data=scraped_data
                 )
                 
+                if detail_logger:
+                    detail_logger.log_restaurant_processing(url, "SCRAPED", "Successfully scraped and saved")
+                
                 scraped.append(ScrapeUrlResponse(
                     url=url,
                     status='scraped',
@@ -1867,7 +1945,17 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
                 ))
                 
             except Exception as e:
+                import traceback
+                error_traceback = traceback.format_exc()
                 error_msg = str(e)
+                
+                logger.error(f"Failed to scrape {url}: {error_msg}")
+                logger.error(f"Full traceback:\n{error_traceback}")
+                
+                if detail_logger:
+                    detail_logger.log_error(f"Scraping failed: {error_msg}", url, e)
+                    detail_logger.logger.debug(f"[ERROR TRACEBACK]\n{error_traceback}")
+                
                 await storage_instance.update_url_status(
                     job_id,
                     url,
@@ -1881,6 +1969,10 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
                     error_message=error_msg
                 ))
         
+        if detail_logger:
+            detail_logger.log_separator(f"BULK SCRAPING COMPLETE")
+            detail_logger.log_info(f"Success: {len(scraped)}, Failed: {len(failed)}")
+        
         return ScrapeUrlsResponse(
             scraped=scraped,
             failed=failed,
@@ -1892,5 +1984,11 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        error_traceback = traceback.format_exc()
         logger.error(f"Error scraping URLs: {str(e)}")
+        logger.error(f"Full traceback:\n{error_traceback}")
+        if detail_logger:
+            detail_logger.log_error(f"Unexpected error: {str(e)}", None, e)
+            detail_logger.logger.debug(f"[ERROR TRACEBACK]\n{error_traceback}")
         raise HTTPException(status_code=500, detail=f"Failed to scrape URLs: {str(e)}")

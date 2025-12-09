@@ -2427,15 +2427,15 @@ class WebScraper:
                                 detail_logger.log_restaurant_processing(url, "NAVIGATING", f"Navigating to {url}")
                             
                             # Minimal wait - just enough for content to load
-                            await page.goto(url, wait_until="domcontentloaded", timeout=20000)  # Reduced to 20s
+                            await page.goto(url, wait_until="domcontentloaded", timeout=15000)  # Reduced to 15s
                             logger.info(f"✅ Page loaded: {url}")
-                            await page.wait_for_timeout(500)  # Reduced to 500ms - most content loads with domcontentloaded
+                            await page.wait_for_timeout(300)  # Reduced to 300ms - domcontentloaded is usually enough
                             
                             # Quick scroll to trigger lazy loading (if needed) - only if OpenTable
                             if is_opentable:
                                 try:
                                     await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 3)")
-                                    await page.wait_for_timeout(300)  # Reduced to 300ms
+                                    await page.wait_for_timeout(200)  # Reduced to 200ms - minimal wait for lazy loading
                                 except:
                                     pass  # Ignore scroll errors
                             
