@@ -131,6 +131,10 @@ class ScraperLogger:
         else:
             self.logger.info("-" * 80)
     
+    def log_info(self, message: str):
+        """Log an info message"""
+        self.logger.info(message)
+    
     def log_debug(self, message: str):
         """Log a debug message"""
         self.logger.debug(message)
