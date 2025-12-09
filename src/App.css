@@ -36,6 +36,36 @@
   font-size: 0.875rem;
 }
 
+.mode-switcher {
+  display: flex;
+  gap: 0.5rem;
+  padding: 1rem 2rem;
+  background: var(--card-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.mode-switcher button {
+  padding: 0.5rem 1.5rem;
+  border: 1px solid var(--border);
+  background: white;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text);
+  transition: all 0.2s;
+}
+
+.mode-switcher button:hover {
+  background: var(--bg-secondary);
+}
+
+.mode-switcher button.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
 .app-content {
   display: grid;
   grid-template-columns: 400px 1fr;

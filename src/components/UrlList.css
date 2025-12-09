@@ -1,0 +1,215 @@
+.url-list {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.url-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.url-list-header h2 {
+  margin: 0;
+  color: #333;
+}
+
+.stats {
+  display: flex;
+  gap: 1rem;
+}
+
+.stat {
+  padding: 0.5rem 1rem;
+  background: #f0f0f0;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.stat.pending {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.stat.scraped {
+  background: #d4edda;
+  color: #155724;
+}
+
+.stat.failed {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.url-list-actions {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.action-button {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 4px;
+  font-size: 1rem;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.action-button.scrape-all {
+  background-color: #28a745;
+  color: white;
+}
+
+.action-button.scrape-all:hover:not(:disabled) {
+  background-color: #218838;
+}
+
+.action-button.scrape-selected {
+  background-color: #17a2b8;
+  color: white;
+}
+
+.action-button.scrape-selected:hover:not(:disabled) {
+  background-color: #138496;
+}
+
+.action-button:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+
+.error-message {
+  background-color: #fee;
+  color: #c33;
+  padding: 1rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+}
+
+.urls-table-container {
+  overflow-x: auto;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.urls-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+}
+
+.urls-table thead {
+  background-color: #f8f9fa;
+}
+
+.urls-table th {
+  padding: 1rem;
+  text-align: left;
+  font-weight: 600;
+  color: #333;
+  border-bottom: 2px solid #ddd;
+}
+
+.urls-table td {
+  padding: 1rem;
+  border-bottom: 1px solid #eee;
+}
+
+.urls-table tbody tr:hover {
+  background-color: #f8f9fa;
+}
+
+.urls-table tbody tr.row-scraped {
+  background-color: #f0f8f0;
+}
+
+.url-cell {
+  max-width: 500px;
+  word-break: break-all;
+}
+
+.url-cell a {
+  color: #0066cc;
+  text-decoration: none;
+}
+
+.url-cell a:hover {
+  text-decoration: underline;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.badge-pending {
+  background-color: #fff3cd;
+  color: #856404;
+}
+
+.badge-scraping {
+  background-color: #cfe2ff;
+  color: #084298;
+}
+
+.badge-scraped {
+  background-color: #d1e7dd;
+  color: #0f5132;
+}
+
+.badge-failed {
+  background-color: #f8d7da;
+  color: #842029;
+}
+
+.error-tooltip {
+  display: inline-block;
+  margin-left: 0.5rem;
+  cursor: help;
+}
+
+.scrape-button {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  cursor: pointer;
+  background-color: #007bff;
+  color: white;
+}
+
+.scrape-button:hover:not(:disabled) {
+  background-color: #0056b3;
+}
+
+.scrape-button:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+
+.scrape-button.scraped {
+  background-color: #6c757d;
+  cursor: default;
+}
+
+.scrape-button.retry {
+  background-color: #ffc107;
+  color: #000;
+}
+
+.scrape-button.retry:hover:not(:disabled) {
+  background-color: #e0a800;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 3rem;
+  color: #666;
+}
+

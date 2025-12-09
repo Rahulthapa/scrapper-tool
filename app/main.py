@@ -11,7 +11,12 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from .models import ScrapeJobCreate, ScrapeJob, ScrapeResult, JobStatus, ParseHTMLRequest, ExtractInternalDataRequest, ExtractFromIndividualPagesRequest
+from .models import (
+    ScrapeJobCreate, ScrapeJob, ScrapeResult, JobStatus, 
+    ParseHTMLRequest, ExtractInternalDataRequest, ExtractFromIndividualPagesRequest,
+    ExtractUrlsRequest, ExtractUrlsResponse, UrlsListResponse, UrlStatus,
+    ScrapeUrlRequest, ScrapeUrlResponse, ScrapeUrlsRequest, ScrapeUrlsResponse
+)
 from .storage import Storage
 from .worker import ScraperWorker
 from .exporter import DataExporter
@@ -1510,9 +1515,28 @@ async def export_job_results(
             detail=f"Job is not completed. Current status: {job.get('status')}"
         )
     
-    # Get results
-    results = await storage_instance.get_results(job_id)
-    data = [result.get('data', result) for result in results]
+    # Check if this is a selective scraping job (has extracted_urls)
+    # If so, only export scraped URLs
+    try:
+        extracted_urls = await storage_instance.get_extracted_urls(job_id)
+        if extracted_urls:
+            # Use scraped URLs only
+            scraped_data = await storage_instance.get_scraped_urls(job_id)
+            if scraped_data:
+                data = scraped_data
+                logger.info(f"Exporting {len(data)} scraped URLs for selective scraping job {job_id}")
+            else:
+                # No scraped URLs yet
+                data = []
+        else:
+            # Regular job - use old method
+            results = await storage_instance.get_results(job_id)
+            data = [result.get('data', result) for result in results]
+    except Exception as e:
+        # Fallback to old method if extracted_urls table doesn't exist
+        logger.warning(f"Could not check extracted_urls, using old method: {str(e)}")
+        results = await storage_instance.get_results(job_id)
+        data = [result.get('data', result) for result in results]
     
     # Debug logging
     logger.info(f"Exporting {len(data)} results for job {job_id}")
@@ -1575,3 +1599,298 @@ async def export_job_results(
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": f"attachment; filename=scrape_results_{job_id}.xlsx"}
         )
+
+
+# ========== URL Extraction Workflow Endpoints ==========
+
+@app.post("/jobs/extract-urls", response_model=ExtractUrlsResponse, status_code=201)
+async def extract_urls(request: ExtractUrlsRequest, background_tasks: BackgroundTasks):
+    """
+    Extract restaurant URLs from a listing page and create a job.
+    Does NOT scrape the URLs - just extracts them for manual selection.
+    """
+    try:
+        storage_instance = get_storage()
+        worker_instance = get_worker()
+        
+        # Create a new job for URL extraction
+        job_id = str(uuid.uuid4())
+        job_data = {
+            'id': job_id,
+            'url': str(request.listing_url),
+            'status': JobStatus.PENDING.value,
+            'export_format': 'json',
+            'use_javascript': request.use_javascript,
+            'created_at': datetime.utcnow().isoformat(),
+        }
+        
+        job = await storage_instance.create_job(job_data)
+        logger.info(f"Created job {job_id} for URL extraction from {request.listing_url}")
+        
+        # Extract URLs in background
+        async def extract_and_save():
+            try:
+                await storage_instance.update_job(job_id, {'status': JobStatus.RUNNING.value})
+                
+                # Extract URLs only (no scraping)
+                urls = await worker_instance.extract_urls_only(
+                    listing_url=str(request.listing_url),
+                    use_javascript=request.use_javascript
+                )
+                
+                # Save extracted URLs to database
+                if urls:
+                    await storage_instance.save_extracted_urls(job_id, urls)
+                    logger.info(f"Saved {len(urls)} URLs for job {job_id}")
+                
+                # Update job status
+                await storage_instance.update_job(job_id, {
+                    'status': JobStatus.COMPLETED.value,
+                    'completed_at': datetime.utcnow().isoformat()
+                })
+                
+            except Exception as e:
+                logger.error(f"Error extracting URLs: {str(e)}")
+                await storage_instance.update_job(job_id, {
+                    'status': JobStatus.FAILED.value,
+                    'error': str(e),
+                    'completed_at': datetime.utcnow().isoformat()
+                })
+        
+        background_tasks.add_task(extract_and_save)
+        
+        # Return immediately with job_id
+        # Frontend will poll /jobs/{job_id}/urls to get the URLs
+        return ExtractUrlsResponse(
+            job_id=job_id,
+            urls=[],  # Will be populated when extraction completes
+            total=0,
+            message="URL extraction started. Poll /jobs/{job_id}/urls for results."
+        )
+        
+    except Exception as e:
+        logger.error(f"Error creating URL extraction job: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create URL extraction job: {str(e)}")
+
+
+@app.get("/jobs/{job_id}/urls", response_model=UrlsListResponse)
+async def get_extracted_urls_list(job_id: str):
+    """Get all extracted URLs for a job with their scrape status"""
+    try:
+        storage_instance = get_storage()
+        
+        # Check if job exists
+        job = await storage_instance.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Get extracted URLs with status
+        url_records = await storage_instance.get_extracted_urls(job_id)
+        
+        # Convert to response format
+        urls = [
+            UrlStatus(
+                url=record.get('url', ''),
+                status=record.get('status', 'pending'),
+                scraped_at=record.get('scraped_at'),
+                error_message=record.get('error_message')
+            )
+            for record in url_records
+        ]
+        
+        # Count by status
+        scraped_count = sum(1 for u in urls if u.status == 'scraped')
+        pending_count = sum(1 for u in urls if u.status == 'pending')
+        failed_count = sum(1 for u in urls if u.status == 'failed')
+        
+        return UrlsListResponse(
+            job_id=job_id,
+            urls=urls,
+            total=len(urls),
+            scraped_count=scraped_count,
+            pending_count=pending_count,
+            failed_count=failed_count
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting extracted URLs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get extracted URLs: {str(e)}")
+
+
+@app.post("/jobs/{job_id}/scrape-url", response_model=ScrapeUrlResponse)
+async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
+    """Scrape a single restaurant URL"""
+    try:
+        storage_instance = get_storage()
+        worker_instance = get_worker()
+        
+        # Check if job exists
+        job = await storage_instance.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Check if URL exists in extracted URLs
+        url_status = await storage_instance.get_url_status(job_id, request.url)
+        if not url_status:
+            raise HTTPException(status_code=404, detail="URL not found in extracted URLs for this job")
+        
+        # Check if already scraped
+        if url_status.get('status') == 'scraped':
+            # Return existing data
+            return ScrapeUrlResponse(
+                url=request.url,
+                status='scraped',
+                data=url_status.get('data')
+            )
+        
+        # Update status to scraping
+        await storage_instance.update_url_status(job_id, request.url, 'scraping')
+        
+        try:
+            # Scrape the URL
+            scraped_data = await worker_instance.scraper.scrape(
+                request.url,
+                use_javascript=True  # Always use JS for restaurant pages
+            )
+            
+            # Parse with OpenTable parser if applicable
+            if 'opentable.com' in request.url.lower() and '/r/' in request.url.lower():
+                scraped_data = await worker_instance.scraper._parse_opentable_restaurant_page(
+                    scraped_data.get('text_content', ''),
+                    request.url
+                )
+            
+            # Update status to scraped and save data
+            await storage_instance.update_url_status(
+                job_id,
+                request.url,
+                'scraped',
+                data=scraped_data
+            )
+            
+            return ScrapeUrlResponse(
+                url=request.url,
+                status='scraped',
+                data=scraped_data
+            )
+            
+        except Exception as scrape_error:
+            # Update status to failed
+            error_msg = str(scrape_error)
+            await storage_instance.update_url_status(
+                job_id,
+                request.url,
+                'failed',
+                error_message=error_msg
+            )
+            
+            return ScrapeUrlResponse(
+                url=request.url,
+                status='failed',
+                error_message=error_msg
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error scraping URL: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to scrape URL: {str(e)}")
+
+
+@app.post("/jobs/{job_id}/scrape-urls", response_model=ScrapeUrlsResponse)
+async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
+    """Scrape multiple restaurant URLs (bulk operation)"""
+    try:
+        storage_instance = get_storage()
+        worker_instance = get_worker()
+        
+        # Check if job exists
+        job = await storage_instance.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        scraped = []
+        failed = []
+        
+        # Process URLs sequentially (one at a time for memory efficiency)
+        for url in request.urls:
+            try:
+                # Check if URL exists
+                url_status = await storage_instance.get_url_status(job_id, url)
+                if not url_status:
+                    failed.append(ScrapeUrlResponse(
+                        url=url,
+                        status='failed',
+                        error_message="URL not found in extracted URLs"
+                    ))
+                    continue
+                
+                # Skip if already scraped
+                if url_status.get('status') == 'scraped':
+                    scraped.append(ScrapeUrlResponse(
+                        url=url,
+                        status='scraped',
+                        data=url_status.get('data')
+                    ))
+                    continue
+                
+                # Update to scraping
+                await storage_instance.update_url_status(job_id, url, 'scraping')
+                
+                # Scrape the URL
+                scraped_data = await worker_instance.scraper.scrape(
+                    url,
+                    use_javascript=True
+                )
+                
+                # Parse with OpenTable parser if applicable
+                if 'opentable.com' in url.lower() and '/r/' in url.lower():
+                    scraped_data = await worker_instance.scraper._parse_opentable_restaurant_page(
+                        scraped_data.get('text_content', ''),
+                        url
+                    )
+                
+                # Update status and save data
+                await storage_instance.update_url_status(
+                    job_id,
+                    url,
+                    'scraped',
+                    data=scraped_data
+                )
+                
+                scraped.append(ScrapeUrlResponse(
+                    url=url,
+                    status='scraped',
+                    data=scraped_data
+                ))
+                
+            except Exception as e:
+                error_msg = str(e)
+                await storage_instance.update_url_status(
+                    job_id,
+                    url,
+                    'failed',
+                    error_message=error_msg
+                )
+                
+                failed.append(ScrapeUrlResponse(
+                    url=url,
+                    status='failed',
+                    error_message=error_msg
+                ))
+        
+        return ScrapeUrlsResponse(
+            scraped=scraped,
+            failed=failed,
+            total=len(request.urls),
+            success_count=len(scraped),
+            failed_count=len(failed)
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error scraping URLs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to scrape URLs: {str(e)}")

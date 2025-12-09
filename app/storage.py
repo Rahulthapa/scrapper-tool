@@ -175,3 +175,89 @@ class Storage:
         """Get results for a job"""
         response = self.client.table('scrape_results').select('*').eq('job_id', job_id).execute()
         return response.data if response.data else []
+    
+    # ========== Extracted URLs Management ==========
+    
+    async def save_extracted_urls(self, job_id: str, urls: List[str]) -> None:
+        """Save list of extracted URLs for a job with status='pending'"""
+        try:
+            data = [
+                {
+                    'job_id': job_id,
+                    'url': url,
+                    'status': 'pending'
+                }
+                for url in urls
+            ]
+            # Use upsert to handle duplicates gracefully
+            self.client.table('extracted_urls').upsert(
+                data,
+                on_conflict='job_id,url'
+            ).execute()
+            logger.info(f"Saved {len(urls)} extracted URLs for job {job_id}")
+        except Exception as e:
+            logger.error(f"Failed to save extracted URLs: {str(e)}")
+            raise
+    
+    async def get_extracted_urls(self, job_id: str) -> List[Dict[str, Any]]:
+        """Get all extracted URLs for a job with their status"""
+        try:
+            response = self.client.table('extracted_urls').select('*').eq('job_id', job_id).order('created_at').execute()
+            return response.data if response.data else []
+        except Exception as e:
+            logger.error(f"Failed to get extracted URLs: {str(e)}")
+            return []
+    
+    async def update_url_status(
+        self, 
+        job_id: str, 
+        url: str, 
+        status: str, 
+        data: Optional[Dict[str, Any]] = None,
+        error_message: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Update scrape status for a specific URL"""
+        try:
+            updates = {
+                'status': status,
+                'updated_at': datetime.utcnow().isoformat()
+            }
+            
+            if status == 'scraped' and data:
+                updates['data'] = data
+                updates['scraped_at'] = datetime.utcnow().isoformat()
+            
+            if error_message:
+                updates['error_message'] = error_message
+            
+            response = self.client.table('extracted_urls').update(updates).eq('job_id', job_id).eq('url', url).execute()
+            return response.data[0] if response.data else {}
+        except Exception as e:
+            logger.error(f"Failed to update URL status: {str(e)}")
+            raise
+    
+    async def get_scraped_urls(self, job_id: str) -> List[Dict[str, Any]]:
+        """Get only URLs that have been successfully scraped (for export)"""
+        try:
+            response = self.client.table('extracted_urls').select('*').eq('job_id', job_id).eq('status', 'scraped').order('scraped_at').execute()
+            urls_with_data = []
+            if response.data:
+                for item in response.data:
+                    if item.get('data'):
+                        # Extract the data field and add URL
+                        url_data = item.get('data', {})
+                        url_data['url'] = item.get('url')
+                        urls_with_data.append(url_data)
+            return urls_with_data
+        except Exception as e:
+            logger.error(f"Failed to get scraped URLs: {str(e)}")
+            return []
+    
+    async def get_url_status(self, job_id: str, url: str) -> Optional[Dict[str, Any]]:
+        """Get status of a specific URL"""
+        try:
+            response = self.client.table('extracted_urls').select('*').eq('job_id', job_id).eq('url', url).limit(1).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Failed to get URL status: {str(e)}")
+            return None

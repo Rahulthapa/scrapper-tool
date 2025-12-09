@@ -72,3 +72,56 @@ class ScrapeResult(BaseModel):
     data: List[Dict[str, Any]]
     total_items: int
     filtered_items: int
+
+
+# ========== URL Extraction Workflow Models ==========
+
+class ExtractUrlsRequest(BaseModel):
+    listing_url: HttpUrl
+    use_javascript: Optional[bool] = True
+
+
+class ExtractUrlsResponse(BaseModel):
+    job_id: str
+    urls: List[str]
+    total: int
+    message: str
+
+
+class UrlStatus(BaseModel):
+    url: str
+    status: str  # pending, scraping, scraped, failed
+    scraped_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+
+
+class UrlsListResponse(BaseModel):
+    job_id: str
+    urls: List[UrlStatus]
+    total: int
+    scraped_count: int
+    pending_count: int
+    failed_count: int
+
+
+class ScrapeUrlRequest(BaseModel):
+    url: str
+
+
+class ScrapeUrlResponse(BaseModel):
+    url: str
+    status: str
+    data: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None
+
+
+class ScrapeUrlsRequest(BaseModel):
+    urls: List[str]
+
+
+class ScrapeUrlsResponse(BaseModel):
+    scraped: List[ScrapeUrlResponse]
+    failed: List[ScrapeUrlResponse]
+    total: int
+    success_count: int
+    failed_count: int

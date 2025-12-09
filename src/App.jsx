@@ -2,13 +2,18 @@ import React, { useState } from 'react'
 import JobForm from './components/JobForm'
 import JobList from './components/JobList'
 import ResultsView from './components/ResultsView'
+import UrlExtractionView from './components/UrlExtractionView'
+import UrlList from './components/UrlList'
 import './App.css'
 
 function App() {
+  const [mode, setMode] = useState('standard') // 'standard' or 'selective'
   const [jobs, setJobs] = useState([])
   const [selectedJob, setSelectedJob] = useState(null)
   const [results, setResults] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [urlExtractionJobId, setUrlExtractionJobId] = useState(null)
+  const [extractedUrls, setExtractedUrls] = useState([])
 
   const API_BASE_URL = import.meta.env.VITE_API_URL || 
     (import.meta.env.PROD ? '' : 'http://localhost:8000')
@@ -121,6 +126,31 @@ function App() {
     }
   }
 
+  const handleUrlsExtracted = (jobId, urls) => {
+    setUrlExtractionJobId(jobId)
+    setExtractedUrls(urls)
+    // Create a fake job for the job list
+    const fakeJob = {
+      id: jobId,
+      url: 'URL Extraction',
+      status: 'completed',
+      created_at: new Date().toISOString(),
+    }
+    setJobs([fakeJob, ...jobs])
+    setSelectedJob(fakeJob)
+  }
+
+  const handleUrlScraped = (result) => {
+    // Update extracted URLs state
+    setExtractedUrls(prev =>
+      prev.map(u =>
+        u.url === result.url
+          ? { ...u, status: result.status }
+          : u
+      )
+    )
+  }
+
   return (
     <div className="app">
       <header className="app-header">
@@ -136,41 +166,90 @@ function App() {
         <span className="header-tagline">AI-powered data extraction</span>
       </header>
 
-      <div className="app-content">
-        <div className="left-panel">
-          <JobForm 
-            onJobCreated={handleJobCreated}
-            apiUrl={API_BASE_URL}
-            setLoading={setLoading}
-          />
-          <JobList
-            jobs={jobs}
-            selectedJob={selectedJob}
-            onJobSelect={handleJobSelect}
-          />
-        </div>
+      <div className="mode-switcher">
+        <button
+          className={mode === 'standard' ? 'active' : ''}
+          onClick={() => setMode('standard')}
+        >
+          Standard Scraping
+        </button>
+        <button
+          className={mode === 'selective' ? 'active' : ''}
+          onClick={() => setMode('selective')}
+        >
+          Selective URL Scraping
+        </button>
+      </div>
 
-        <div className="right-panel">
-          {selectedJob ? (
-            <ResultsView
-              job={selectedJob}
-              results={results}
-              loading={loading}
-              onExport={handleExport}
-            />
-          ) : (
-            <div className="empty-state-container">
-              <div className="empty-state">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/>
-                  <rect x="9" y="3" width="6" height="4" rx="1"/>
-                  <path d="M9 12h6M9 16h6"/>
-                </svg>
-                <p>Create a scraping job to get started</p>
-              </div>
+      <div className="app-content">
+        {mode === 'selective' ? (
+          <>
+            <div className="left-panel">
+              <UrlExtractionView
+                onUrlsExtracted={handleUrlsExtracted}
+                API_BASE_URL={API_BASE_URL}
+              />
             </div>
-          )}
-        </div>
+            <div className="right-panel">
+              {urlExtractionJobId && extractedUrls.length > 0 ? (
+                <UrlList
+                  jobId={urlExtractionJobId}
+                  urls={extractedUrls}
+                  API_BASE_URL={API_BASE_URL}
+                  onScraped={handleUrlScraped}
+                />
+              ) : (
+                <div className="empty-state-container">
+                  <div className="empty-state">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/>
+                      <rect x="9" y="3" width="6" height="4" rx="1"/>
+                      <path d="M9 12h6M9 16h6"/>
+                    </svg>
+                    <p>Extract URLs from a listing page to get started</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="left-panel">
+              <JobForm 
+                onJobCreated={handleJobCreated}
+                apiUrl={API_BASE_URL}
+                setLoading={setLoading}
+              />
+              <JobList
+                jobs={jobs}
+                selectedJob={selectedJob}
+                onJobSelect={handleJobSelect}
+              />
+            </div>
+
+            <div className="right-panel">
+              {selectedJob ? (
+                <ResultsView
+                  job={selectedJob}
+                  results={results}
+                  loading={loading}
+                  onExport={handleExport}
+                />
+              ) : (
+                <div className="empty-state-container">
+                  <div className="empty-state">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/>
+                      <rect x="9" y="3" width="6" height="4" rx="1"/>
+                      <path d="M9 12h6M9 16h6"/>
+                    </svg>
+                    <p>Create a scraping job to get started</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   )

@@ -391,6 +391,38 @@ class ScraperWorker:
         
         return False
     
+    async def extract_urls_only(
+        self,
+        listing_url: str,
+        use_javascript: bool = True
+    ) -> List[str]:
+        """
+        Extract restaurant URLs from a listing page WITHOUT scraping them.
+        Used for the selective URL scraping workflow.
+        
+        Args:
+            listing_url: URL of the listing page (e.g., metro/region page)
+            use_javascript: Whether to use Playwright for JS-rendered pages
+            
+        Returns:
+            List of restaurant URLs extracted from the listing page
+        """
+        logger.info(f"Extracting URLs only from listing page: {listing_url}")
+        
+        try:
+            # Use the existing URL extraction method
+            restaurant_urls = await self.scraper.extract_restaurant_urls_from_listing(
+                listing_url=listing_url,
+                use_javascript=use_javascript
+            )
+            
+            logger.info(f"Extracted {len(restaurant_urls)} restaurant URLs from {listing_url}")
+            return restaurant_urls
+            
+        except Exception as e:
+            logger.error(f"Failed to extract URLs from listing page: {str(e)}")
+            raise
+    
     async def _process_restaurant_listing_with_individual_pages(
         self,
         listing_url: str,
