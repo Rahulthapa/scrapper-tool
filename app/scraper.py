@@ -1950,9 +1950,9 @@ class WebScraper:
             for link in opentable_links:
                 href = link.get('href', '')
                 if href:
-                    # Normalize URL
-                    if href.startswith('/'):
-                        href = urljoin(listing_url, href)
+                # Normalize URL
+                if href.startswith('/'):
+                    href = urljoin(listing_url, href)
                     elif not href.startswith('http'):
                         continue
                     
@@ -1964,7 +1964,7 @@ class WebScraper:
                         if clean_url not in seen_urls:
                             restaurant_urls.append(clean_url)
                             seen_urls.add(clean_url)
-                            seen_urls.add(href)
+                    seen_urls.add(href)
         
         # Method 3: Extract from JavaScript variables (if available)
         if use_javascript:
@@ -1979,19 +1979,19 @@ class WebScraper:
                     page = await context.new_page()
                     
                     logger.info(f"Loading listing page with Playwright: {listing_url}")
-                    await page.goto(listing_url, wait_until="domcontentloaded", timeout=60000)
+                    await page.goto(listing_url, wait_until="domcontentloaded", timeout=30000)  # Reduced from 60s
                     
                     # Wait for content to load - OpenTable uses dynamic loading
-                    await page.wait_for_timeout(5000)  # Wait 5 seconds for initial load
+                    await page.wait_for_timeout(2000)  # Reduced from 5s
                     
                     # Scroll to load more content (OpenTable uses infinite scroll)
                     logger.info("Scrolling to load restaurant content...")
-                    for i in range(3):  # Scroll 3 times
+                    for i in range(2):  # Reduced from 3 to 2 scrolls
                         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        await page.wait_for_timeout(2000)  # Wait 2 seconds between scrolls
+                        await page.wait_for_timeout(1000)  # Reduced from 2s to 1s
                     
                     # Wait a bit more for lazy-loaded content
-                    await page.wait_for_timeout(3000)
+                    await page.wait_for_timeout(1000)  # Reduced from 3s to 1s
                     
                     # Extract URLs from JavaScript - Enhanced for OpenTable
                     js_urls = await page.evaluate("""
@@ -2012,14 +2012,14 @@ class WebScraper:
                             linkSelectors.forEach(selector => {
                                 try {
                                     const links = document.querySelectorAll(selector);
-                                    links.forEach(link => {
+                            links.forEach(link => {
                                         const href = link.href || link.getAttribute('href');
                                         if (href) {
                                             // Normalize relative URLs
                                             if (href.startsWith('/')) {
                                                 urls.push(baseUrl + href);
                                             } else if (href.startsWith('http')) {
-                                                urls.push(href);
+                                    urls.push(href);
                                             }
                                         }
                                     });
@@ -2121,7 +2121,7 @@ class WebScraper:
                             windowVars.forEach(data => {
                                 if (data) {
                                     try {
-                                        const dataStr = JSON.stringify(data);
+                                const dataStr = JSON.stringify(data);
                                         // Match OpenTable restaurant URLs
                                         const urlPatterns = [
                                             /https?:\\/\\/[^"\\s]*opentable\\.com\\/r\\/[^"\\s"\\?]+/g,
@@ -2264,7 +2264,7 @@ class WebScraper:
         max_concurrent: int = 1,  # Default to sequential (1 at a time)
         retry_failed: bool = True,
         max_retries: int = 2,
-        save_incrementally: bool = False,
+        save_incrementally: bool = True,  # Default to True for memory efficiency
         job_id: str = None
     ) -> List[Dict[str, Any]]:
         """
@@ -2316,9 +2316,50 @@ class WebScraper:
         # Process restaurants in batches to avoid overwhelming the server
         detailed_restaurants = []
         
-        async def extract_single_restaurant(restaurant_data: Dict, url: str, index: int = 0) -> Dict[str, Any]:
+        # OPTIMIZATION: Create a single browser instance to reuse across all pages
+        # This dramatically reduces memory usage (from ~200MB per page to ~200MB total)
+        browser_context = None
+        playwright_manager = None
+        
+        if use_javascript:
+            try:
+                from playwright.async_api import async_playwright
+                # Use context manager but keep it alive
+                playwright_manager = async_playwright()
+                p = await playwright_manager.__aenter__()
+                # Minimal browser settings to reduce memory
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--no-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--disable-gpu',
+                        '--disable-software-rasterizer',
+                        '--disable-extensions',
+                        '--disable-background-networking',
+                        '--disable-background-timer-throttling',
+                        '--disable-renderer-backgrounding',
+                        '--disable-backgrounding-occluded-windows',
+                        '--disable-ipc-flooding-protection',
+                        '--memory-pressure-off'
+                    ]
+                )
+                # Simplified context - minimal settings
+                browser_context = await browser.new_context(
+                    viewport={'width': 1280, 'height': 720},  # Smaller viewport
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    java_script_enabled=True
+                )
+                logger.info("✅ Created shared browser instance for all pages")
+            except Exception as browser_init_error:
+                logger.warning(f"Failed to create shared browser instance: {browser_init_error}")
+                browser_context = None
+                playwright_manager = None
+        
+        async def extract_single_restaurant(restaurant_data: Dict, url: str, index: int = 0, page=None) -> Dict[str, Any]:
             """Extract detailed data from a single restaurant page"""
             start_time = time.time()
+            page_created = False
             try:
                 logger.info(f"Extracting detailed data from: {url}")
                 if detail_logger:
@@ -2335,71 +2376,50 @@ class WebScraper:
                 # Get HTML content for parsing
                 html_content = None
                 if use_javascript or is_opentable:
-                    # For Playwright, get HTML directly
+                    # OPTIMIZATION: Reuse shared browser context instead of creating new one
                     if detail_logger:
-                        detail_logger.log_restaurant_processing(url, "FETCHING_HTML", "Using Playwright")
+                        detail_logger.log_restaurant_processing(url, "FETCHING_HTML", "Using Playwright (shared browser)")
                     try:
-                        from playwright.async_api import async_playwright
-                        async with async_playwright() as p:
-                            # Anti-detection: Use realistic browser settings
-                            browser = await p.chromium.launch(
-                                headless=True, 
-                                args=[
-                                    '--no-sandbox',
-                                    '--disable-blink-features=AutomationControlled',
-                                    '--disable-dev-shm-usage',
-                                    '--disable-setuid-sandbox',
-                                    '--no-first-run',
-                                    '--no-zygote',
-                                    '--disable-gpu'
-                                ]
-                            )
+                        # Use provided page or create new one from shared context
+                        if page is None and browser_context:
+                            page = await browser_context.new_page()
+                            page_created = True
+                        
+                        if page:
+                            # Minimal wait - just enough for content to load
+                            await page.goto(url, wait_until="domcontentloaded", timeout=30000)  # Reduced from 60s
+                            await page.wait_for_timeout(1000)  # Reduced from 2-3s
                             
-                            # Anti-detection: Realistic browser context
-                            context = await browser.new_context(
-                                viewport={'width': 1920, 'height': 1080},
-                                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                                locale='en-US',
-                                timezone_id='America/New_York',
-                                permissions=['geolocation'],
-                                extra_http_headers={
-                                    'Accept-Language': 'en-US,en;q=0.9',
-                                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                                    'Accept-Encoding': 'gzip, deflate, br',
-                                    'Connection': 'keep-alive',
-                                    'Upgrade-Insecure-Requests': '1',
-                                }
-                            )
-                            
-                            # Anti-detection: Remove webdriver traces
-                            page = await context.new_page()
-                            await page.add_init_script("""
-                                Object.defineProperty(navigator, 'webdriver', {
-                                    get: () => undefined
-                                });
-                                window.chrome = {
-                                    runtime: {}
-                                };
-                            """)
-                            
-                            # Navigate with realistic delays
-                            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                            await page.wait_for_timeout(2000 + (index % 3) * 500)  # Randomize wait time
-                            
-                            # Scroll to trigger lazy loading
-                            await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
-                            await page.wait_for_timeout(1000)
+                            # Quick scroll to trigger lazy loading (if needed)
+                            try:
+                                await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 3)")
+                                await page.wait_for_timeout(500)  # Reduced wait
+                            except:
+                                pass  # Ignore scroll errors
                             
                             html_content = await page.content()
-                            await context.close()
-                            await browser.close()
-                        if detail_logger:
-                            detail_logger.log_restaurant_processing(url, "HTML_FETCHED", 
-                                f"Playwright - Length: {len(html_content):,} bytes")
+                            
+                            # Close page immediately to free memory
+                            if page_created:
+                                await page.close()
+                                page_created = False
+                            
+                            if detail_logger:
+                                detail_logger.log_restaurant_processing(url, "HTML_FETCHED", 
+                                    f"Playwright - Length: {len(html_content):,} bytes")
+                        else:
+                            raise Exception("No browser context available")
                     except Exception as e:
                         logger.warning(f"Failed to get HTML with Playwright: {e}")
                         if detail_logger:
                             detail_logger.log_url_error(url, f"Playwright failed: {str(e)}")
+                        # Clean up page if created
+                        if page_created and page:
+                            try:
+                                await page.close()
+                            except:
+                                pass
+                            page_created = False
                 
                 # Fallback: get HTML with httpx
                 if not html_content:
@@ -2583,84 +2603,102 @@ class WebScraper:
                 logger.warning(f"⚠️ Returning restaurant data with URL only: {url}")
                 return restaurant_data
         
-        # Process in batches with concurrency limit and progress tracking
-        semaphore = asyncio.Semaphore(max_concurrent)
-        processed_count = {'value': 0}
-        failed_count = {'value': 0}
+        # OPTIMIZATION: Process sequentially (one at a time) to minimize memory usage
+        # This ensures only one browser page is active at a time and data is saved immediately
+        processed_count = 0
+        failed_count = 0
         start_time = time.time()
+        results = []
         
-        async def extract_with_semaphore(restaurant_data, url, index):
-            async with semaphore:
-                try:
-                    result = await extract_single_restaurant(restaurant_data, url, index)
-                    processed_count['value'] += 1
-                    current = processed_count['value']
-                    progress = (current / total) * 100
-                    elapsed = time.time() - start_time
-                    rate = current / elapsed if elapsed > 0 else 0
-                    remaining = (total - current) / rate if rate > 0 else 0
-                    
-                    logger.info(f"✅ [{current}/{total}] ({progress:.1f}%) | {url[:60]}... | Rate: {rate:.1f}/s | ETA: {remaining:.0f}s")
-                    if detail_logger:
-                        detail_logger.log_info(f"Progress: {current}/{total} ({progress:.1f}%) | Rate: {rate:.1f} pages/sec")
-                    
-                    # Incremental saving: save result immediately if enabled
-                    if save_incrementally and job_id and result and isinstance(result, dict):
-                        try:
-                            from app.storage import Storage
-                            storage = Storage()
-                            # Ensure URL is in result
-                            if not result.get('url'):
-                                result['url'] = url
-                            await storage.save_results(job_id, [result])
-                            logger.info(f"💾 Incrementally saved result {current}/{total} for {url[:50]}...")
-                        except Exception as save_error:
-                            logger.warning(f"Failed to save incrementally: {save_error}")
-                    
-                    return result
-                except Exception as e:
-                    failed_count['value'] += 1
-                    logger.error(f"❌ Failed [{index+1}/{total}]: {url} | Error: {str(e)[:100]}")
-                    if detail_logger:
-                        detail_logger.log_error(f"Failed to extract: {str(e)}", url, e)
-                    
-                    # Retry logic
-                    if retry_failed and max_retries > 0:
-                        for retry in range(max_retries):
-                            try:
-                                await asyncio.sleep(2 ** retry)  # Exponential backoff
-                                logger.info(f"🔄 Retry {retry+1}/{max_retries} for {url}")
-                                result = await extract_single_restaurant(restaurant_data, url, index)
-                                processed_count['value'] += 1
-                                failed_count['value'] -= 1
-                                logger.info(f"✅ Retry successful: {url}")
-                                return result
-                            except Exception as retry_error:
-                                logger.warning(f"Retry {retry+1} failed: {str(retry_error)[:100]}")
-                    
-                    # Return original data if all retries failed
-                    return restaurant_data
-        
-        # Create tasks for all restaurants with index
-        tasks = [
-            extract_with_semaphore(restaurant, url, idx) 
-            for idx, (restaurant, url) in enumerate(restaurant_urls)
-        ]
-        
-        # Execute all tasks
-        logger.info(f"📊 Processing {len(tasks)} restaurant pages concurrently...")
+        logger.info(f"📊 Processing {len(restaurant_urls)} restaurant pages SEQUENTIALLY (one at a time)...")
         if detail_logger:
-            detail_logger.log_info(f"Starting concurrent processing of {len(tasks)} pages")
+            detail_logger.log_info(f"Starting sequential processing of {len(restaurant_urls)} pages")
         
-        try:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            logger.info(f"✅ All {len(results)} tasks completed")
-        except Exception as e:
-            logger.error(f"❌ Fatal error in batch processing: {str(e)}", exc_info=True)
-            if detail_logger:
-                detail_logger.log_error(f"Fatal error in batch processing: {str(e)}", None, e)
-            # Return what we have so far
-            results = []
+        # Process each restaurant URL one at a time
+        for idx, (restaurant_data, url) in enumerate(restaurant_urls):
+            try:
+                logger.info(f"🔄 [{idx+1}/{len(restaurant_urls)}] Processing: {url[:60]}...")
+                
+                # Extract data from this restaurant page
+                result = await extract_single_restaurant(restaurant_data, url, idx, page=None)
+                
+                processed_count += 1
+                current = processed_count
+                progress = (current / total) * 100
+                elapsed = time.time() - start_time
+                rate = current / elapsed if elapsed > 0 else 0
+                remaining = (total - current) / rate if rate > 0 else 0
+                
+                logger.info(f"✅ [{current}/{total}] ({progress:.1f}%) | {url[:60]}... | Rate: {rate:.1f}/s | ETA: {remaining:.0f}s")
+                if detail_logger:
+                    detail_logger.log_info(f"Progress: {current}/{total} ({progress:.1f}%) | Rate: {rate:.1f} pages/sec")
+                
+                # CRITICAL: Save result immediately after each page is scraped
+                # This ensures data is saved incrementally and reduces memory usage
+                # Always save if job_id is provided (for sequential processing)
+                if job_id and result and isinstance(result, dict):
+                    try:
+                        from app.storage import Storage
+                        storage = Storage()
+                        # Ensure URL is in result
+                        if not result.get('url'):
+                            result['url'] = url
+                        await storage.save_results(job_id, [result])
+                        logger.info(f"💾 Saved result {current}/{total} immediately for {url[:50]}...")
+                    except Exception as save_error:
+                        logger.warning(f"Failed to save incrementally: {save_error}")
+                
+                # Add to results list
+                results.append(result)
+                
+                # Small delay between pages to avoid overwhelming the server
+                if idx < len(restaurant_urls) - 1:  # Don't delay after last page
+                    await asyncio.sleep(0.5)  # 500ms delay between pages
+                    
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"❌ Failed [{idx+1}/{total}]: {url} | Error: {str(e)[:100]}")
+                if detail_logger:
+                    detail_logger.log_error(f"Failed to extract: {str(e)}", url, e)
+                
+                # Retry logic
+                if retry_failed and max_retries > 0:
+                    retry_success = False
+                    for retry in range(max_retries):
+                        try:
+                            await asyncio.sleep(2 ** retry)  # Exponential backoff
+                            logger.info(f"🔄 Retry {retry+1}/{max_retries} for {url}")
+                            result = await extract_single_restaurant(restaurant_data, url, idx, page=None)
+                            processed_count += 1
+                            failed_count -= 1
+                            logger.info(f"✅ Retry successful: {url}")
+                            
+                            # Save retry result immediately
+                            if job_id and result and isinstance(result, dict):
+                                try:
+                                    from app.storage import Storage
+                                    storage = Storage()
+                                    if not result.get('url'):
+                                        result['url'] = url
+                                    await storage.save_results(job_id, [result])
+                                    logger.info(f"💾 Saved retry result for {url[:50]}...")
+                                except Exception as save_error:
+                                    logger.warning(f"Failed to save retry result: {save_error}")
+                            
+                            results.append(result)
+                            retry_success = True
+                            break
+                        except Exception as retry_error:
+                            logger.warning(f"Retry {retry+1} failed: {str(retry_error)[:100]}")
+                    
+                    if not retry_success:
+                        # Return original data if all retries failed
+                        results.append(restaurant_data)
+                else:
+                    # Return original data if retries disabled
+                    results.append(restaurant_data)
+        
+        logger.info(f"✅ Sequential processing complete: {processed_count} succeeded, {failed_count} failed")
         
         # Process results
         logger.info(f"Processing {len(results)} results...")
@@ -2692,13 +2730,13 @@ class WebScraper:
                     if result.get('url'):
                         detailed_restaurants.append(result)
                         logger.info(f"✅ Added result {i+1} to detailed_restaurants (total: {len(detailed_restaurants)})")
-                    else:
+            else:
                         logger.warning(f"⚠️ Result {i+1} has no URL: {result_keys[:10]}")
                         # Still add it with URL from restaurant_urls
                         if i < len(restaurant_urls):
                             restaurant_data, url = restaurant_urls[i]
                             result['url'] = url
-                            detailed_restaurants.append(result)
+                detailed_restaurants.append(result)
                             logger.info(f"✅ Added result {i+1} with URL from restaurant_urls")
                 else:
                     logger.warning(f"Result {i+1} is not a dict: {type(result)}")
@@ -2718,13 +2756,13 @@ class WebScraper:
         # Add restaurants that didn't have URLs (but only if we have fewer results than expected)
         if len(detailed_restaurants) < len(restaurants):
             processed_urls = {r.get('url', '').lower() for r in detailed_restaurants if r.get('url')}
-            processed_names = {r.get('name', '').lower() for r in detailed_restaurants if r.get('name')}
-            for restaurant in restaurants:
+        processed_names = {r.get('name', '').lower() for r in detailed_restaurants if r.get('name')}
+        for restaurant in restaurants:
                 # Only add if not already processed (by URL or name)
                 restaurant_url = restaurant.get('url', '').lower()
                 restaurant_name = restaurant.get('name', '').lower()
                 if restaurant_url not in processed_urls and restaurant_name not in processed_names:
-                    detailed_restaurants.append(restaurant)
+                detailed_restaurants.append(restaurant)
         
         total_time = time.time() - start_time
         final_failed = failed_count['value']
@@ -2741,6 +2779,17 @@ class WebScraper:
             if total_time > 0:
                 detail_logger.log_info(f"Time: {total_time:.1f}s | Rate: {success_count/total_time:.2f} pages/sec")
             detail_logger.log_separator()
+        
+        # CRITICAL: Clean up shared browser instance to free memory
+        try:
+            if browser_context:
+                await browser_context.close()
+                logger.info("✅ Closed shared browser context")
+            if playwright_manager:
+                await playwright_manager.__aexit__(None, None, None)
+                logger.info("✅ Stopped Playwright instance")
+        except Exception as cleanup_error:
+            logger.warning(f"Error during browser cleanup: {cleanup_error}")
         
         return detailed_restaurants
 
