@@ -1787,13 +1787,24 @@ async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
             if 'opentable.com' in request.url.lower() and '/r/' in request.url.lower():
                 if detail_logger:
                     detail_logger.log_restaurant_processing(request.url, "PARSING", "Using OpenTable parser")
-                scraped_data = await worker_instance.scraper._parse_opentable_restaurant_page(
-                    scraped_data.get('text_content', ''),
-                    request.url
-                )
-                if detail_logger:
-                    detail_logger.log_restaurant_processing(request.url, "PARSE_SUCCESS", 
-                        f"Parsed {len(scraped_data)} data fields")
+                
+                # Get HTML content and create BeautifulSoup object
+                html_content = scraped_data.get('text_content', '') or scraped_data.get('html_content', '')
+                if html_content:
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(html_content, 'html.parser')
+                    scraped_data = await worker_instance.scraper._parse_opentable_restaurant_page(
+                        soup, 
+                        request.url, 
+                        html_content
+                    )
+                    if detail_logger:
+                        detail_logger.log_restaurant_processing(request.url, "PARSE_SUCCESS", 
+                            f"Parsed {len(scraped_data)} data fields")
+                else:
+                    logger.warning(f"No HTML content found in scraped_data for {request.url}")
+                    if detail_logger:
+                        detail_logger.log_warning(f"No HTML content found for parsing", request.url)
             
             # Update status to scraped and save data
             await storage_instance.update_url_status(
@@ -1922,10 +1933,19 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
                 
                 # Parse with OpenTable parser if applicable
                 if 'opentable.com' in url.lower() and '/r/' in url.lower():
-                    scraped_data = await worker_instance.scraper._parse_opentable_restaurant_page(
-                        scraped_data.get('text_content', ''),
-                        url
-                    )
+                    html_content = scraped_data.get('text_content', '') or scraped_data.get('html_content', '')
+                    if html_content:
+                        from bs4 import BeautifulSoup
+                        soup = BeautifulSoup(html_content, 'html.parser')
+                        scraped_data = await worker_instance.scraper._parse_opentable_restaurant_page(
+                            soup,
+                            url,
+                            html_content
+                        )
+                    else:
+                        logger.warning(f"No HTML content found in scraped_data for {url}")
+                        if detail_logger:
+                            detail_logger.log_warning(f"No HTML content found for parsing", url)
                 
                 # Update status and save data
                 await storage_instance.update_url_status(
