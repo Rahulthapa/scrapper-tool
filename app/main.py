@@ -1821,14 +1821,35 @@ async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
                             window.chrome = { runtime: {} };
                         """)
                         
-                        # Navigate and wait for content
-                        await page.goto(request.url, wait_until="domcontentloaded", timeout=15000)
-                        await page.wait_for_timeout(300)  # Wait for dynamic content
+                        # Navigate with longer timeout and retry logic
+                        max_retries = 3
+                        page_loaded = False
+                        for retry in range(max_retries):
+                            try:
+                                await page.goto(
+                                    request.url, 
+                                    wait_until="domcontentloaded", 
+                                    timeout=30000  # Increased to 30 seconds
+                                )
+                                page_loaded = True
+                                break
+                            except Exception as goto_error:
+                                if retry < max_retries - 1:
+                                    logger.warning(f"Page load attempt {retry + 1} failed, retrying: {goto_error}")
+                                    await page.wait_for_timeout(1000 * (retry + 1))  # Exponential backoff
+                                else:
+                                    raise
+                        
+                        if not page_loaded:
+                            raise Exception("Failed to load page after multiple retries")
+                        
+                        # Wait for dynamic content to load
+                        await page.wait_for_timeout(500)  # Increased wait time
                         
                         # Scroll to trigger lazy loading
                         try:
                             await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 3)")
-                            await page.wait_for_timeout(200)
+                            await page.wait_for_timeout(300)  # Increased wait time
                         except:
                             pass
                         
@@ -1846,7 +1867,34 @@ async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
                     logger.error(f"Failed to extract HTML with Playwright: {html_error}")
                     if detail_logger:
                         detail_logger.log_url_error(request.url, f"HTML extraction failed: {str(html_error)}")
-                    raise Exception(f"HTML extraction failed: {str(html_error)}")
+                    
+                    # Fallback: Try with standard scraper (which has its own retry logic)
+                    logger.warning(f"Falling back to standard scraper for {request.url}")
+                    try:
+                        scraped_data = await worker_instance.scraper.scrape(
+                            request.url,
+                            use_javascript=True
+                        )
+                        # Try to parse with OpenTable parser if we got any content
+                        if scraped_data.get('text_content') and len(scraped_data.get('text_content', '')) > 1000:
+                            from bs4 import BeautifulSoup
+                            # Use text_content as HTML (it's the best we have)
+                            html_content = scraped_data.get('text_content', '')
+                            soup = BeautifulSoup(html_content, 'html.parser')
+                            scraped_data = worker_instance.scraper._parse_opentable_restaurant_page(
+                                soup, 
+                                request.url, 
+                                html_content
+                            )
+                            if detail_logger:
+                                detail_logger.log_restaurant_processing(request.url, "PARSE_SUCCESS_FALLBACK", 
+                                    f"Parsed {len(scraped_data)} data fields using fallback method")
+                        else:
+                            # If fallback also failed, raise the original error
+                            raise Exception(f"HTML extraction failed: {str(html_error)}")
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback scraper also failed: {fallback_error}")
+                        raise Exception(f"HTML extraction failed: {str(html_error)}")
                 
                 # Parse with OpenTable parser
                 if html_content and len(html_content) > 1000:  # Ensure we have meaningful content
@@ -2048,14 +2096,35 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
                                 window.chrome = { runtime: {} };
                             """)
                             
-                            # Navigate and wait for content
-                            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-                            await page.wait_for_timeout(300)  # Wait for dynamic content
+                            # Navigate with longer timeout and retry logic
+                            max_retries = 3
+                            page_loaded = False
+                            for retry in range(max_retries):
+                                try:
+                                    await page.goto(
+                                        url, 
+                                        wait_until="domcontentloaded", 
+                                        timeout=30000  # Increased to 30 seconds
+                                    )
+                                    page_loaded = True
+                                    break
+                                except Exception as goto_error:
+                                    if retry < max_retries - 1:
+                                        logger.warning(f"Page load attempt {retry + 1} failed for {url}, retrying: {goto_error}")
+                                        await page.wait_for_timeout(1000 * (retry + 1))  # Exponential backoff
+                                    else:
+                                        raise
+                            
+                            if not page_loaded:
+                                raise Exception("Failed to load page after multiple retries")
+                            
+                            # Wait for dynamic content to load
+                            await page.wait_for_timeout(500)  # Increased wait time
                             
                             # Scroll to trigger lazy loading
                             try:
                                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 3)")
-                                await page.wait_for_timeout(200)
+                                await page.wait_for_timeout(300)  # Increased wait time
                             except:
                                 pass
                             
@@ -2073,9 +2142,36 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
                         logger.error(f"Failed to extract HTML with Playwright for {url}: {html_error}")
                         if detail_logger:
                             detail_logger.log_url_error(url, f"HTML extraction failed: {str(html_error)}")
-                        raise Exception(f"HTML extraction failed: {str(html_error)}")
+                        
+                        # Fallback: Try with standard scraper (which has its own retry logic)
+                        logger.warning(f"Falling back to standard scraper for {url}")
+                        try:
+                            scraped_data = await worker_instance.scraper.scrape(
+                                url,
+                                use_javascript=True
+                            )
+                            # Try to parse with OpenTable parser if we got any content
+                            if scraped_data.get('text_content') and len(scraped_data.get('text_content', '')) > 1000:
+                                from bs4 import BeautifulSoup
+                                # Use text_content as HTML (it's the best we have)
+                                html_content = scraped_data.get('text_content', '')
+                                soup = BeautifulSoup(html_content, 'html.parser')
+                                scraped_data = worker_instance.scraper._parse_opentable_restaurant_page(
+                                    soup,
+                                    url,
+                                    html_content
+                                )
+                                if detail_logger:
+                                    detail_logger.log_restaurant_processing(url, "PARSE_SUCCESS_FALLBACK", 
+                                        f"Parsed {len(scraped_data)} data fields using fallback method")
+                            else:
+                                # If fallback also failed, raise the original error
+                                raise Exception(f"HTML extraction failed: {str(html_error)}")
+                        except Exception as fallback_error:
+                            logger.error(f"Fallback scraper also failed for {url}: {fallback_error}")
+                            raise Exception(f"HTML extraction failed: {str(html_error)}")
                     
-                    # Parse with OpenTable parser
+                    # Parse with OpenTable parser (only if we got HTML from direct extraction)
                     if html_content and len(html_content) > 1000:  # Ensure we have meaningful content
                         from bs4 import BeautifulSoup
                         soup = BeautifulSoup(html_content, 'html.parser')
