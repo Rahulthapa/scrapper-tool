@@ -431,10 +431,20 @@ class ScraperWorker:
                 logger.info(f"⏭️ SKIPPING listing page scraping - will only scrape extracted restaurant URLs")
             
             # STEP 2: Limit to max_restaurants if specified (None = scrape all)
+            # FOR TESTING: If max_restaurants=1, skip first URL and scrape 2nd URL only
             if max_restaurants and max_restaurants > 0:
                 original_count = len(restaurant_urls)
-                restaurant_urls = restaurant_urls[:max_restaurants]
-                logger.info(f"📋 Limiting to {max_restaurants} restaurants (out of {original_count} found)")
+                
+                # TESTING MODE: Skip first URL, scrape only 2nd URL
+                if max_restaurants == 1 and len(restaurant_urls) > 1:
+                    logger.info(f"🧪 TESTING MODE: Skipping first URL, scraping 2nd URL only")
+                    logger.info(f"📋 First URL (skipped): {restaurant_urls[0]}")
+                    logger.info(f"📋 Second URL (will scrape): {restaurant_urls[1]}")
+                    restaurant_urls = [restaurant_urls[1]]  # Take only the 2nd URL
+                else:
+                    restaurant_urls = restaurant_urls[:max_restaurants]
+                
+                logger.info(f"📋 Limiting to {max_restaurants} restaurant(s) (out of {original_count} found)")
                 if restaurant_urls:
                     logger.info(f"📋 Will scrape: {restaurant_urls[0] if len(restaurant_urls) == 1 else f'{len(restaurant_urls)} restaurants'}")
             else:

@@ -2220,10 +2220,25 @@ class WebScraper:
             url = url.split('#')[0]
             url = re.sub(r'[?&](utm_[^&]*|ref=[^&]*|source=[^&]*)', '', url)
             
-            # CRITICAL: Filter out the listing page URL itself
-            if url.lower() == listing_url.lower():
-                logger.debug(f"Filtered out listing page URL: {url}")
+            # CRITICAL: Filter out the listing page URL itself (with normalization)
+            listing_url_normalized = listing_url.lower().rstrip('/').split('?')[0].split('#')[0]
+            url_normalized = url.lower().rstrip('/').split('?')[0].split('#')[0]
+            
+            # Check exact match
+            if url_normalized == listing_url_normalized:
+                logger.info(f"⏭️ Filtered out listing page URL: {url}")
+                if detail_logger:
+                    detail_logger.log_debug(f"Filtered out listing page URL: {url}")
                 continue
+            
+            # Also check if URL contains listing patterns (metro/region/neighborhood)
+            if any(pattern in url_normalized for pattern in ['/metro/', '/region/', '/neighborhood/']):
+                # If it matches the listing URL pattern, exclude it
+                if listing_url_normalized in url_normalized or url_normalized in listing_url_normalized:
+                    logger.info(f"⏭️ Filtered out listing page URL (pattern match): {url}")
+                    if detail_logger:
+                        detail_logger.log_debug(f"Filtered out listing page URL (pattern match): {url}")
+                    continue
             
             # For OpenTable, only keep URLs with /r/ (restaurant pages)
             if 'opentable.com' in listing_url.lower():
@@ -2255,7 +2270,7 @@ class WebScraper:
             if len(restaurant_urls) > 0:
                 logger.warning(f"Sample raw URLs: {restaurant_urls[:5]}")
         
-        return cleaned_urls[:100]  # Limit to 100 URLs
+        return cleaned_urls  # Return all extracted URLs (no limit)
 
     async def extract_from_individual_pages(
         self,
@@ -2361,6 +2376,15 @@ class WebScraper:
                 browser_instance = None
                 browser_context = None
                 playwright_manager = None
+        
+        # Validate browser context before processing
+        if use_javascript and not browser_context:
+            logger.error("❌ CRITICAL: Browser context is None but use_javascript=True!")
+            logger.error("❌ Cannot process individual pages without browser context")
+            if detail_logger:
+                detail_logger.log_error("Browser context not created - individual pages cannot be visited", None, None)
+            # Return empty results since we can't process without browser
+            return []
         
         async def extract_single_restaurant(restaurant_data: Dict, url: str, index: int = 0, page=None) -> Dict[str, Any]:
             """Extract detailed data from a single restaurant page"""
@@ -2634,12 +2658,32 @@ class WebScraper:
         
         logger.info(f"📊 Processing {total_urls} restaurant pages SEQUENTIALLY (one at a time)...")
         logger.info(f"📋 Restaurant URLs to visit: {restaurant_urls[:5] if len(restaurant_urls) > 5 else restaurant_urls}...")
+        
+        # CRITICAL: Validate we have URLs to process
+        if not restaurant_urls or len(restaurant_urls) == 0:
+            logger.error("❌ No restaurant URLs to process!")
+            return []
+        
+        # CRITICAL: Validate browser context if using JavaScript
+        if use_javascript and not browser_context:
+            logger.error("❌ Browser context is None - cannot process individual pages!")
+            logger.error("❌ Returning empty results")
+            return []
+        
+        logger.info(f"✅ Browser context ready: {browser_context is not None}")
+        logger.info(f"✅ Starting loop to process {len(restaurant_urls)} URLs...")
+        
         if detail_logger:
             detail_logger.log_info(f"Starting sequential processing of {total_urls} pages")
+            detail_logger.log_info(f"Browser context available: {browser_context is not None}")
             detail_logger.log_info(f"URLs to visit: {[url for _, url in restaurant_urls[:10]]}")
         
         # Process each restaurant URL one at a time
         for idx, (restaurant_data, url) in enumerate(restaurant_urls):
+            # Validate URL before processing
+            if not url or not isinstance(url, str) or not url.startswith('http'):
+                logger.warning(f"⚠️ Skipping invalid URL at index {idx}: {url}")
+                continue
             try:
                 logger.info(f"🔄 [{idx+1}/{total_urls}] Processing: {url[:60]}...")
                 logger.info(f"🌐 VISITING INDIVIDUAL RESTAURANT PAGE: {url}")
@@ -2727,6 +2771,18 @@ class WebScraper:
                     results.append(restaurant_data)
         
         logger.info(f"✅ Sequential processing complete: {processed_count} succeeded, {failed_count} failed")
+        logger.info(f"📊 Results collected: {len(results)} results")
+        
+        # CRITICAL: Validate we got results
+        if len(results) == 0 and len(restaurant_urls) > 0:
+            logger.error(f"❌ CRITICAL: Loop processed {len(restaurant_urls)} URLs but got 0 results!")
+            logger.error(f"❌ This indicates a serious problem - check browser context and error logs above")
+            if detail_logger:
+                detail_logger.log_error("Loop completed but no results collected - check for silent failures", None, None)
+        
+        if len(results) < len(restaurant_urls):
+            logger.warning(f"⚠️ Only got {len(results)} results from {len(restaurant_urls)} URLs")
+            logger.warning(f"⚠️ Missing {len(restaurant_urls) - len(results)} results")
         
         # Process results
         logger.info(f"Processing {len(results)} results...")
