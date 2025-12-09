@@ -1207,45 +1207,52 @@ class WebScraper:
         # ========== OVERVIEW SECTION ==========
         if detail_logger:
             detail_logger.log_section_extraction(url, "OVERVIEW", "STARTED")
-        # Restaurant name
-        name_elem = soup.select_one('h1.aE-vw__restaurantName, h1[class*="restaurantName"]')
+        
+        # Restaurant name - try multiple selectors
+        name_elem = soup.select_one('h1.E-vwXONV9nc-, h1[class*="E-vw"], h1[class*="restaurantName"], h1')
         if name_elem:
             restaurant_data['name'] = name_elem.get_text(strip=True)
         
-        # Rating and review count
-        rating_elem = soup.select_one('#ratingInfo, [data-testid="restaurant-overview-header"] [data-testid="icVipFill"]')
+        # Rating and review count - look for #ratingInfo div
+        rating_elem = soup.select_one('#ratingInfo')
         if rating_elem:
-            rating_text = rating_elem.find_next(string=re.compile(r'\d+\.?\d*\s*\(\d+\)'))
-            if rating_text:
-                rating_match = re.search(r'(\d+\.?\d*)\s*\((\d+)\)', rating_text)
-                if rating_match:
-                    restaurant_data['rating'] = float(rating_match.group(1))
-                    restaurant_data['review_count'] = int(rating_match.group(2).replace(',', ''))
+            rating_text = rating_elem.get_text(strip=True)
+            rating_match = re.search(r'(\d+\.?\d*)\s*\((\d+)\)', rating_text)
+            if rating_match:
+                restaurant_data['rating'] = float(rating_match.group(1))
+                restaurant_data['review_count'] = int(rating_match.group(2).replace(',', ''))
+                restaurant_data['overall_rating'] = float(rating_match.group(1))
         
-        # Price range
-        price_elem = soup.select_one('#priceBandInfo, [data-testid="restaurant-overview-header"]')
+        # Price range - look for #priceBandInfo div
+        price_elem = soup.select_one('#priceBandInfo')
         if price_elem:
-            price_text = price_elem.get_text()
-            price_match = re.search(r'\$(\d+)\s+to\s+\$(\d+)', price_text)
-            if price_match:
-                restaurant_data['price_range'] = f"${price_match.group(1)} to ${price_match.group(2)}"
+            price_text = price_elem.get_text(strip=True)
+            if price_text:
+                restaurant_data['price_range'] = price_text
         
-        # Cuisine
-        cuisine_elem = soup.select_one('#cuisineInfo, [data-testid="restaurant-overview-header"]')
+        # Cuisine - look for #cuisineInfo div
+        cuisine_elem = soup.select_one('#cuisineInfo')
         if cuisine_elem:
             cuisine_text = cuisine_elem.get_text(strip=True)
             if cuisine_text and cuisine_text != restaurant_data.get('name'):
                 restaurant_data['cuisine'] = cuisine_text
         
-        # Address
-        address_elem = soup.select_one('[data-testid="addressContainer"], .akxdr__addressContainer, .a4d46__addressText')
+        # Address - look for addressContainer
+        address_elem = soup.select_one('[data-testid="addressContainer"]')
         if address_elem:
-            restaurant_data['address'] = address_elem.get_text(strip=True)
+            # Try to find the address span
+            address_span = address_elem.select_one('span._4d46CwpPw6k-, span[class*="address"]')
+            if address_span:
+                restaurant_data['address'] = address_span.get_text(strip=True)
+            else:
+                restaurant_data['address'] = address_elem.get_text(strip=True)
         
-        # Neighborhood
-        neighborhood_elem = soup.select_one('.a7d03__neighborhood, [data-testid="neighborhood"]')
+        # Neighborhood - look in multiple places
+        neighborhood_elem = soup.select_one('div._7d0340TNQ5c-, [data-testid="neighborhood"]')
         if neighborhood_elem:
-            restaurant_data['neighborhood'] = neighborhood_elem.get_text(strip=True)
+            neighborhood_text = neighborhood_elem.get_text(strip=True)
+            if neighborhood_text:
+                restaurant_data['neighborhood'] = neighborhood_text
         
         # ========== ABOUT SECTION ==========
         if detail_logger:
@@ -1257,18 +1264,19 @@ class WebScraper:
                 about_section = about_section.find_parent('section')
         
         if about_section:
-            # Tags
+            # Tags - updated selector
             tags = []
-            tag_elems = about_section.select('.aBeBa__tag, [class*="tag"]')
+            tag_elems = about_section.select('span.SCM99wuIzbk-, span[class*="tag"], li.hiPnPUkPwLM- span')
             for tag in tag_elems:
                 tag_text = tag.get_text(strip=True)
                 if tag_text:
                     tags.append(tag_text)
             if tags:
                 restaurant_data['tags'] = tags
+                restaurant_data['amenities'] = ', '.join(tags)  # Also store as amenities for CSV
             
-            # Description
-            desc_elem = about_section.select_one('[data-test="restaurant-description"], .asn86__container')
+            # Description - updated selector
+            desc_elem = about_section.select_one('[data-test="restaurant-description"], div.sn86cyGEeWY- span')
             if desc_elem:
                 desc_text = desc_elem.get_text(strip=True)
                 if desc_text:
@@ -1279,13 +1287,14 @@ class WebScraper:
         if details_section:
             details_data = {}
             
-            # Helper function to find detail by title text
+            # Helper function to find detail by title text - updated for new HTML structure
             def find_detail_by_title(title_text):
-                title_elems = details_section.find_all('span', class_=re.compile('detailTitle', re.I), string=re.compile(title_text, re.I))
+                # Look for span with data-test="restaurant-detail-title" containing the title
+                title_elems = details_section.find_all('span', {'data-test': 'restaurant-detail-title'}, string=re.compile(title_text, re.I))
                 if not title_elems:
-                    # Try alternative selector
-                    title_elems = details_section.find_all(string=re.compile(title_text, re.I))
-                    title_elems = [e for e in title_elems if e.parent and 'detailTitle' in str(e.parent.get('class', []))]
+                    # Try finding by text content
+                    title_elems = details_section.find_all('span', class_=re.compile('_0p64hHgVLY4-|detailTitle', re.I))
+                    title_elems = [e for e in title_elems if e.get_text(strip=True) and re.search(title_text, e.get_text(strip=True), re.I)]
                 
                 for title_elem in title_elems:
                     parent = title_elem.find_parent('li')
@@ -1293,115 +1302,177 @@ class WebScraper:
                         return parent
                 return None
             
+            # Helper function to get detail value
+            def get_detail_value(parent):
+                if not parent:
+                    return None
+                # Try new selector first
+                value_elem = parent.select_one('div.-XkftahGV5Y-, div[class*="detail"]')
+                if value_elem:
+                    # Check if it's a link
+                    link = value_elem.select_one('a._0nB0b1ILlGA-, a[class*="link"]')
+                    if link:
+                        return link.get('href') if 'href' in link.attrs else link.get_text(strip=True)
+                    return value_elem.get_text(strip=True)
+                return None
+            
             # Location
             location_parent = find_detail_by_title('Location')
             if location_parent:
-                location_link = location_parent.select_one('a.a0nB0__link')
+                location_link = location_parent.select_one('a._0nB0b1ILlGA-, a[class*="link"]')
                 if location_link:
                     details_data['location'] = location_link.get_text(strip=True)
                     details_data['location_url'] = location_link.get('href')
+                else:
+                    value = get_detail_value(location_parent)
+                    if value:
+                        details_data['location'] = value
             
             # Price
             price_parent = find_detail_by_title('^Price$')
             if price_parent:
-                price_text = price_parent.select_one('.a-Xkf__detail')
-                if price_text:
-                    details_data['price'] = price_text.get_text(strip=True)
+                value = get_detail_value(price_parent)
+                if value:
+                    details_data['price'] = value
+                    if not restaurant_data.get('price_range'):
+                        restaurant_data['price_range'] = value
             
             # Dining style
             dining_parent = find_detail_by_title('Dining style')
             if dining_parent:
-                dining_text = dining_parent.select_one('.a-Xkf__detail')
-                if dining_text:
-                    details_data['dining_style'] = dining_text.get_text(strip=True)
+                value = get_detail_value(dining_parent)
+                if value:
+                    details_data['dining_style'] = value
             
             # Hours of operation
             hours_parent = find_detail_by_title('Hours')
             if hours_parent:
-                hours_text = hours_parent.select_one('.a-Xkf__detail')
-                if hours_text:
-                    details_data['hours'] = hours_text.get_text(strip=True)
+                value = get_detail_value(hours_parent)
+                if value:
+                    details_data['hours_of_operation'] = value
+                    # Also extract lunch and dinner separately if possible
+                    hours_text = value
+                    if 'lunch' in hours_text.lower() or 'am' in hours_text.lower():
+                        lunch_match = re.search(r'(\d{1,2}):(\d{2})\s*(am|pm)\s*[–-]\s*(\d{1,2}):(\d{2})\s*(am|pm)', hours_text, re.I)
+                        if lunch_match:
+                            details_data['hours_of_operation_lunch'] = hours_text
             
             # Website
             website_parent = find_detail_by_title('Website')
             if website_parent:
-                website_link = website_parent.select_one('a.a0nB0__link')
+                website_link = website_parent.select_one('a._0nB0b1ILlGA-, a[class*="link"]')
                 if website_link:
                     details_data['website'] = website_link.get('href')
+                    restaurant_data['website'] = website_link.get('href')
             
             # Payment options
             payment_parent = find_detail_by_title('Payment')
             if payment_parent:
-                payment_text = payment_parent.select_one('.a-Xkf__detail')
-                if payment_text:
-                    details_data['payment_options'] = payment_text.get_text(strip=True)
+                value = get_detail_value(payment_parent)
+                if value:
+                    details_data['payment_options'] = value
+                    restaurant_data['payment_options'] = value
             
             # Dress code
             dress_parent = find_detail_by_title('Dress code')
             if dress_parent:
-                dress_text = dress_parent.select_one('.a-Xkf__detail')
-                if dress_text:
-                    details_data['dress_code'] = dress_text.get_text(strip=True)
+                value = get_detail_value(dress_parent)
+                if value:
+                    details_data['dress_code'] = value
+                    restaurant_data['dress_code'] = value
             
             # Private party facilities
             private_parent = find_detail_by_title('Private party facilities')
             if private_parent:
-                private_text = private_parent.select_one('.a-Xkf__detail')
-                if private_text:
-                    details_data['private_party_facilities'] = private_text.get_text(strip=True)
-            
-            # Private party contact
-            private_contact_parent = find_detail_by_title('Private party contact')
-            if private_contact_parent:
-                private_contact_text = private_contact_parent.select_one('.a-Xkf__detail')
-                if private_contact_text:
-                    details_data['private_party_contact'] = private_contact_text.get_text(strip=True)
+                value = get_detail_value(private_parent)
+                if value:
+                    details_data['private_party_facilities'] = value
             
             # Phone number
             phone_parent = find_detail_by_title('Phone')
             if phone_parent:
-                phone_link = phone_parent.select_one('a.a0nB0__link[href^="tel:"]')
+                phone_link = phone_parent.select_one('a._0nB0b1ILlGA-[href^="tel:"], a[href^="tel:"]')
                 if phone_link:
-                    details_data['phone'] = phone_link.get_text(strip=True)
+                    phone_text = phone_link.get_text(strip=True)
+                    details_data['phone'] = phone_text
+                    details_data['phone_number'] = phone_text
+                    restaurant_data['phone_number'] = phone_text
+                else:
+                    value = get_detail_value(phone_parent)
+                    if value:
+                        details_data['phone'] = value
+                        details_data['phone_number'] = value
+                        restaurant_data['phone_number'] = value
             
             # Cuisines
             cuisines_parent = find_detail_by_title('Cuisines')
             if cuisines_parent:
-                cuisines_text = cuisines_parent.select_one('.a-Xkf__detail')
-                if cuisines_text:
-                    details_data['cuisines'] = [c.strip() for c in cuisines_text.get_text(strip=True).split(',')]
+                value = get_detail_value(cuisines_parent)
+                if value:
+                    cuisines_list = [c.strip() for c in value.split(',')]
+                    details_data['cuisines'] = cuisines_list
+                    if not restaurant_data.get('cuisine'):
+                        restaurant_data['cuisine'] = cuisines_list[0] if cuisines_list else value
             
             # Cross street
             cross_parent = find_detail_by_title('Cross street')
             if cross_parent:
-                cross_text = cross_parent.select_one('.a-Xkf__detail')
-                if cross_text:
-                    details_data['cross_street'] = cross_text.get_text(strip=True)
+                value = get_detail_value(cross_parent)
+                if value:
+                    details_data['cross_street'] = value
             
             # Parking details
             parking_parent = find_detail_by_title('Parking')
             if parking_parent:
-                parking_text = parking_parent.select_one('.a-Xkf__detail')
-                if parking_text:
-                    details_data['parking_details'] = parking_text.get_text(strip=True)
+                value = get_detail_value(parking_parent)
+                if value:
+                    details_data['parking_details'] = value
+                    restaurant_data['parking_details'] = value
+            
+            # Public transit
+            transit_parent = find_detail_by_title('Public transit')
+            if transit_parent:
+                value = get_detail_value(transit_parent)
+                if value:
+                    details_data['public_transit'] = value
+                    restaurant_data['public_transit'] = value
             
             # Executive chef
             chef_parent = find_detail_by_title('Executive chef')
             if chef_parent:
-                chef_text = chef_parent.select_one('.a-Xkf__detail')
-                if chef_text:
-                    details_data['executive_chef'] = chef_text.get_text(strip=True)
+                value = get_detail_value(chef_parent)
+                if value:
+                    details_data['executive_chef'] = value
+                    restaurant_data['executive_chef'] = value
             
             # Additional info
             additional_parent = find_detail_by_title('Additional')
             if additional_parent:
-                additional_text = additional_parent.select_one('.a-Xkf__detail')
-                if additional_text:
-                    additional_list = [a.strip() for a in additional_text.get_text(strip=True).split(',')]
+                value = get_detail_value(additional_parent)
+                if value:
+                    additional_list = [a.strip() for a in value.split(',')]
                     details_data['additional'] = additional_list
+                    details_data['additional_notes'] = value
+                    restaurant_data['additional_notes'] = value
+            
+            # Catering
+            catering_parent = find_detail_by_title('Catering')
+            if catering_parent:
+                value = get_detail_value(catering_parent)
+                if value:
+                    details_data['catering'] = value
+            
+            # Delivery & takeout
+            delivery_parent = find_detail_by_title('Delivery')
+            if delivery_parent:
+                value = get_detail_value(delivery_parent)
+                if value:
+                    details_data['delivery_takeout'] = value
             
             if details_data:
                 restaurant_data['details'] = details_data
+                # Also add top-level fields for easier CSV export
+                restaurant_data.update({k: v for k, v in details_data.items() if k not in ['details']})
                 if detail_logger:
                     detail_logger.log_section_data(url, "DETAILS", details_data, 
                         item_count=len(details_data))
@@ -1412,31 +1483,42 @@ class WebScraper:
         experiences_section = soup.select_one('section#experiences, [data-test="experiences"]')
         if experiences_section:
             experiences = []
-            experience_items = experiences_section.select('li.aNJ-1__container, [data-test="experience-title"]')
+            # Updated selector for experience items
+            experience_items = experiences_section.select('li.NJ-1Q46nQo4-, li[class*="NJ-1"], [data-test="experience-title"]')
             for exp in experience_items:
                 exp_data = {}
                 
-                # Title
-                title_elem = exp.select_one('h3[data-test="experience-title"], .aQTFf__title')
+                # Title - updated selector
+                title_elem = exp.select_one('h3.QTFfDyOlx1A-, h3[data-test="experience-title"]')
                 if title_elem:
                     exp_data['title'] = title_elem.get_text(strip=True)
                 
-                # Price
-                price_elem = exp.select_one('[data-test="experience-price"], .aMvJi__text')
+                # Price - updated selector
+                price_elem = exp.select_one('p.MvJipbaC9Sw-[data-test="experience-price"], [data-test="experience-price"]')
                 if price_elem:
                     exp_data['price'] = price_elem.get_text(strip=True)
                 
-                # Schedule
-                schedule_elem = exp.select_one('[data-test="experience-schedule"], .ajdI7__schedule')
+                # Schedule - updated selector
+                schedule_elem = exp.select_one('span[data-test="experience-schedule"]')
                 if schedule_elem:
                     exp_data['schedule'] = schedule_elem.get_text(strip=True)
                 
-                # Description
-                desc_elem = exp.select_one('.ar38L__description, .amRka__truncated')
+                # Times
+                times_elem = exp.select_one('span[data-test="experience-times"]')
+                if times_elem:
+                    exp_data['times'] = times_elem.get_text(strip=True)
+                
+                # Location
+                location_elem = exp.select_one('span[data-test="experience-location"]')
+                if location_elem:
+                    exp_data['location'] = location_elem.get_text(strip=True)
+                
+                # Description - updated selector
+                desc_elem = exp.select_one('div.mRkaDmf76bo-, div[class*="description"]')
                 if desc_elem:
                     exp_data['description'] = desc_elem.get_text(strip=True)
                 
-                if exp_data:
+                if exp_data.get('title'):
                     experiences.append(exp_data)
             
             if experiences:
@@ -1489,35 +1571,46 @@ class WebScraper:
         dishes_section = soup.select_one('section#popular_dishes, [data-test="popular-dishes"]')
         if dishes_section:
             dishes = []
-            dish_items = dishes_section.select('li[data-name], [data-testid="dish-card"]')
+            # Updated selector for dish items
+            dish_items = dishes_section.select('li[data-name], [data-testid="dish-card"], li.jBQL7-W-5PU-')
             for dish in dish_items:
                 dish_data = {}
                 
-                # Name
-                name_elem = dish.select_one('.aRyvx__dishName, [data-name]')
+                # Name - updated selector
+                name_elem = dish.select_one('h3.RyvxIm5m-kU-, h3[class*="dishName"], [data-name]')
                 if name_elem:
-                    dish_data['name'] = name_elem.get_text(strip=True) or name_elem.get('data-name')
+                    dish_data['name'] = name_elem.get_text(strip=True) or dish.get('data-name')
                 
-                # Description
-                desc_elem = dish.select_one('.auJtF__dishDescription')
+                # Description - updated selector
+                desc_elem = dish.select_one('p.uJtF1oHNub4-, p[class*="dishDescription"]')
                 if desc_elem:
                     dish_data['description'] = desc_elem.get_text(strip=True)
                 
-                # Reviews
-                reviews_elem = dish.select_one('.ancEm__dishReviews')
+                # Reviews count - updated selector
+                reviews_elem = dish.select_one('p.ncEmjUtMOHM-, p[class*="dishReviews"]')
                 if reviews_elem:
-                    dish_data['reviews'] = reviews_elem.get_text(strip=True)
+                    reviews_text = reviews_elem.get_text(strip=True)
+                    dish_data['reviews_count'] = reviews_text
+                    # Extract number if possible
+                    reviews_match = re.search(r'(\d+)', reviews_text)
+                    if reviews_match:
+                        dish_data['reviews_count_num'] = int(reviews_match.group(1))
                 
                 # Image
                 img_elem = dish.select_one('img')
                 if img_elem:
-                    dish_data['image_url'] = img_elem.get('src')
+                    dish_data['image_url'] = img_elem.get('src') or img_elem.get('data-src')
                 
                 if dish_data.get('name'):
                     dishes.append(dish_data)
             
             if dishes:
                 restaurant_data['popular_dishes'] = dishes
+                # Also add as menu_items for CSV compatibility
+                for idx, dish in enumerate(dishes[:10], 1):  # Limit to first 10 for CSV
+                    restaurant_data[f'menu_items_{idx}_name'] = dish.get('name', '')
+                    restaurant_data[f'menu_items_{idx}_description'] = dish.get('description', '')
+                    restaurant_data[f'menu_items_{idx}_reviews_count'] = dish.get('reviews_count', '')
                 if detail_logger:
                     detail_logger.log_section_data(url, "POPULAR_DISHES", dishes, item_count=len(dishes))
         
@@ -1538,36 +1631,36 @@ class WebScraper:
             if menu_tab_names:
                 menu_data['menu_types'] = menu_tab_names
             
-            # Menu items
+            # Menu items - updated selectors
             menu_items = []
-            menu_sections = menu_section.select('article[data-test="menu-section"], .aHUd8__container')
+            menu_sections = menu_section.select('article[data-test="menu-section"], article.HUd8eILRRC8-')
             for section in menu_sections:
-                section_title = section.select_one('h3.aEbvO__menuTitle')
+                section_title = section.select_one('h3.EbvOy8UOPGg-, h3[class*="menuTitle"]')
                 if section_title:
                     section_name = section_title.get_text(strip=True)
                     
-                    items = section.select('li.aiC5T__item')
+                    items = section.select('li.iC5T-7C2eyc-, li[class*="item"]')
                     section_items = []
                     for item in items:
                         item_data = {}
                         
-                        # Item title and price
-                        item_details = item.select_one('.acT75__itemDetails')
-                        if item_details:
-                            title_span = item_details.select_one('span[data-test="item-title"]')
-                            price_span = item_details.select_one('span[data-test="item-price"]')
+                        # Item title and price - updated selector
+                        item_header = item.select_one('h4.cT75TCHiUEI-')
+                        if item_header:
+                            title_span = item_header.select_one('span[data-test="item-title"]')
+                            price_span = item_header.select_one('span[data-test="item-price"]')
                             if title_span:
                                 item_data['title'] = title_span.get_text(strip=True)
                             if price_span:
                                 item_data['price'] = price_span.get_text(strip=True)
                         
-                        # Description
-                        desc = item.select_one('.a3rtU__itemDescription')
+                        # Description - updated selector
+                        desc = item.select_one('p._3rtUPqHMnbY-, p[class*="itemDescription"]')
                         if desc:
                             item_data['description'] = desc.get_text(strip=True)
                         
                         # Variations
-                        variations = item.select('li.aMH0N__variationDetails')
+                        variations = item.select('ul li, li[class*="variation"]')
                         if variations:
                             item_data['variations'] = []
                             for var in variations:
@@ -1591,10 +1684,16 @@ class WebScraper:
             if menu_items:
                 menu_data['menu_items'] = menu_items
             
-            # Last updated
-            last_updated = menu_section.select_one('[data-test="menu-footer"], .aUCtP__footerText')
+            # Last updated - updated selector
+            last_updated = menu_section.select_one('footer[data-test="menu-footer"] p.UCtPodZhkGI-, [data-test="menu-footer"]')
             if last_updated:
-                menu_data['last_updated'] = last_updated.get_text(strip=True)
+                last_updated_text = last_updated.get_text(strip=True)
+                menu_data['last_updated'] = last_updated_text
+                restaurant_data['menu_last_updated'] = last_updated_text
+            
+            # Menu types
+            if menu_tab_names:
+                restaurant_data['menu_menu_types'] = ', '.join(menu_tab_names)
             
             if menu_data:
                 restaurant_data['menu'] = menu_data
@@ -1609,82 +1708,96 @@ class WebScraper:
         if reviews_section:
             reviews_data = {}
             
-            # Overall rating
-            overall_rating = reviews_section.select_one('.atSiV__ratingValue')
+            # Overall rating - updated selector
+            overall_rating = reviews_section.select_one('div.tSiVMQB9es0-, div[class*="ratingValue"]')
             if overall_rating:
                 try:
-                    reviews_data['overall_rating'] = float(overall_rating.get_text(strip=True))
+                    rating_text = overall_rating.get_text(strip=True)
+                    rating_val = float(rating_text)
+                    reviews_data['overall_rating'] = rating_val
+                    restaurant_data['overall_rating'] = rating_val
                 except:
                     pass
             
-            # Rating breakdown
-            rating_list = reviews_section.select('li.aqPbf__rating-container')
+            # Rating breakdown - updated selector
+            rating_list = reviews_section.select('li.qPbfK-M7o4I-, li[class*="rating"]')
             rating_breakdown = {}
             for rating_item in rating_list:
-                rating_name = rating_item.select_one('[data-testid="rating-name"]')
-                rating_value = rating_item.select_one('[data-testid="rating-value"]')
+                rating_name = rating_item.select_one('span[data-testid="rating-name"], span._2IbhjCOldv8-')
+                rating_value = rating_item.select_one('span[data-testid="rating-value"], span.yEg-cOaKGpI-')
                 if rating_name and rating_value:
                     try:
-                        rating_breakdown[rating_name.get_text(strip=True)] = float(rating_value.get_text(strip=True))
+                        name = rating_name.get_text(strip=True)
+                        value = float(rating_value.get_text(strip=True))
+                        rating_breakdown[name.lower()] = value
+                        # Also add as top-level fields for CSV
+                        restaurant_data[f'ratings_breakdown_{name.lower()}'] = value
                     except:
                         pass
             if rating_breakdown:
                 reviews_data['rating_breakdown'] = rating_breakdown
             
-            # Noise level
+            # Noise level - updated selector
             noise_elem = reviews_section.select_one('[data-testid="icNoiseLevel"]')
             if noise_elem:
-                noise_text = noise_elem.find_next(string=re.compile('Noise'))
-                if noise_text:
+                noise_parent = noise_elem.find_parent()
+                if noise_parent:
+                    noise_text = noise_parent.get_text(strip=True)
                     noise_match = re.search(r'Noise\s*•\s*(.+)', noise_text)
                     if noise_match:
-                        reviews_data['noise_level'] = noise_match.group(1).strip()
+                        noise_level = noise_match.group(1).strip()
+                        reviews_data['noise_level'] = noise_level
+                        restaurant_data['noise_level'] = noise_level
             
-            # Review summary
-            summary_elem = reviews_section.select_one('.aoSdt__summary')
+            # Review summary - updated selector
+            summary_elem = reviews_section.select_one('div.oSdtTbLw0P4-, div[class*="summary"]')
             if summary_elem:
-                reviews_data['summary'] = summary_elem.get_text(strip=True)
+                summary_text = summary_elem.get_text(strip=True)
+                reviews_data['summary'] = summary_text
             
-            # Individual reviews
-            review_items = reviews_section.select('li.aafkK__review, [data-test="reviews-list-item"]')
+            # Individual reviews - updated selector
+            review_items = reviews_section.select('li.afkKaa-4T28-, li[data-test="reviews-list-item"]')
             reviews_list = []
             for review in review_items[:10]:  # Limit to 10 reviews
                 review_data = {}
                 
-                # Reviewer name
-                reviewer = review.select_one('.aRUDc__primaryInfo')
+                # Reviewer name - updated selector
+                reviewer = review.select_one('p.RUDcRcUiZI4-, p[class*="primaryInfo"]')
                 if reviewer:
                     review_data['reviewer'] = reviewer.get_text(strip=True)
                 
-                # Rating
-                review_rating = review.select_one('.atSiV__ratingValue')
+                # Rating - updated selector
+                review_rating = review.select_one('div.tSiVMQB9es0-, div[class*="ratingValue"]')
                 if review_rating:
                     try:
                         review_data['rating'] = float(review_rating.get_text(strip=True))
                     except:
                         pass
                 
-                # Date
-                date_elem = review.select_one('.aiLkE__submittedDate')
+                # Date - updated selector
+                date_elem = review.select_one('p.iLkEeQbexGs-, p[class*="submittedDate"]')
                 if date_elem:
                     review_data['date'] = date_elem.get_text(strip=True)
                 
-                # Category ratings
-                categories = review.select('li.a-k5x__category')
+                # Category ratings - updated selector
+                categories = review.select('li.-k5xpTfSXac-, li[class*="category"]')
                 category_ratings = {}
                 for cat in categories:
-                    cat_name = cat.get_text(strip=True).split()[0] if cat.get_text(strip=True) else None
-                    cat_rating = cat.select_one('span')
-                    if cat_name and cat_rating:
-                        try:
-                            category_ratings[cat_name] = int(cat_rating.get_text(strip=True))
-                        except:
-                            pass
+                    cat_text = cat.get_text(strip=True)
+                    if cat_text:
+                        parts = cat_text.split()
+                        if len(parts) >= 2:
+                            cat_name = parts[0]
+                            try:
+                                cat_rating = int(parts[-1])
+                                category_ratings[cat_name.lower()] = cat_rating
+                            except:
+                                pass
                 if category_ratings:
                     review_data['category_ratings'] = category_ratings
                 
-                # Review text
-                review_text_elem = review.select_one('.a6rFG__reviewText span')
+                # Review text - updated selector
+                review_text_elem = review.select_one('div._6rFG6U7PA6M- span, div[class*="reviewText"] span')
                 if review_text_elem:
                     review_data['text'] = review_text_elem.get_text(strip=True)
                 
@@ -1710,64 +1823,101 @@ class WebScraper:
         # ========== FAQs SECTION ==========
         if detail_logger:
             detail_logger.log_section_extraction(url, "FAQS", "STARTED")
-        faqs_section = soup.select_one('section#faqs, [data-test="faqs-item"]')
-        if faqs_section:
-            faqs = []
-            faq_items = faqs_section.select('[data-test="faqs-item"]')
-            for faq in faq_items:
-                faq_data = {}
-                
-                # Question
-                question = faq.select_one('h4.aD1DF__title, button h4')
-                if question:
-                    faq_data['question'] = question.get_text(strip=True)
-                
-                # Answer
-                answer = faq.select_one('.a0EgX__text, [aria-labelledby] p')
-                if answer:
-                    faq_data['answer'] = answer.get_text(strip=True)
-                
-                if faq_data.get('question'):
-                    faqs.append(faq_data)
-            
-            if faqs:
-                restaurant_data['faqs'] = faqs
-                if detail_logger:
-                    detail_logger.log_section_data(url, "FAQS", faqs, item_count=len(faqs))
+        # Try to find FAQs from JSON-LD first (more reliable)
+        faqs_json = soup.find('script', type='application/ld+json')
+        faqs = []
+        if faqs_json:
+            try:
+                json_data = json.loads(faqs_json.string)
+                if isinstance(json_data, dict) and json_data.get('@type') == 'FAQPage':
+                    main_entity = json_data.get('mainEntity', [])
+                    for idx, faq_item in enumerate(main_entity[:10], 1):  # Limit to 10
+                        if isinstance(faq_item, dict) and faq_item.get('@type') == 'Question':
+                            question = faq_item.get('name', '')
+                            answer_obj = faq_item.get('acceptedAnswer', {})
+                            answer = answer_obj.get('text', '') if isinstance(answer_obj, dict) else ''
+                            if question:
+                                faqs.append({'question': question, 'answer': answer})
+                                # Also add as top-level fields for CSV
+                                restaurant_data[f'faqs_{idx}_question'] = question
+                                restaurant_data[f'faqs_{idx}_answer'] = answer
+            except:
+                pass
+        
+        # Also try HTML structure
+        if not faqs:
+            faqs_section = soup.select_one('section#faqs, [data-test="faqs-item"]')
+            if faqs_section:
+                faq_items = faqs_section.select('[data-test="faqs-item"], div.RjGtnqKK63c-')
+                for idx, faq in enumerate(faq_items[:10], 1):
+                    faq_data = {}
+                    
+                    # Question - updated selector
+                    question = faq.select_one('h4.D1DFHmi9wDU-, h4[class*="title"], button h4')
+                    if question:
+                        faq_data['question'] = question.get_text(strip=True)
+                        restaurant_data[f'faqs_{idx}_question'] = faq_data['question']
+                    
+                    # Answer - updated selector
+                    answer = faq.select_one('p._0EgX2-OIShI-, p[class*="text"], [aria-labelledby] p')
+                    if answer:
+                        faq_data['answer'] = answer.get_text(strip=True)
+                        restaurant_data[f'faqs_{idx}_answer'] = faq_data['answer']
+                    
+                    if faq_data.get('question'):
+                        faqs.append(faq_data)
+        
+        if faqs:
+            restaurant_data['faqs'] = faqs
+            if detail_logger:
+                detail_logger.log_section_data(url, "FAQS", faqs, item_count=len(faqs))
         
         # ========== PHOTOS SECTION ==========
         if detail_logger:
             detail_logger.log_section_extraction(url, "PHOTOS", "STARTED")
         photos_section = soup.select_one('section#photos, [data-test="restaurant-photos"]')
         if photos_section:
-            photo_count_elem = photos_section.select_one('h2')
+            # Photo count - updated selector
+            photo_count_elem = photos_section.select_one('h2._8mty8ImkgJA-, h2[class*="title"]')
             if photo_count_elem:
                 photo_count_text = photo_count_elem.get_text(strip=True)
                 photo_count_match = re.search(r'(\d+)\s+Photos?', photo_count_text)
                 if photo_count_match:
-                    restaurant_data['photo_count'] = int(photo_count_match.group(1))
+                    photo_count = int(photo_count_match.group(1))
+                    restaurant_data['photo_count'] = photo_count
             
-            # Photo URLs
+            # Photo URLs - updated selector
             photo_buttons = photos_section.select('[data-testid="gallery-photo"], button[aria-label*="Enlarge"]')
             photos = []
+            photo_urls = []
             for photo in photo_buttons[:20]:  # Limit to 20
                 img = photo.select_one('img')
                 if img:
-                    photo_url = img.get('src')
-                    if photo_url:
-                        photos.append(photo_url)
+                    photo_url = img.get('src') or img.get('data-src')
+                    if photo_url and photo_url not in photo_urls:
+                        photo_urls.append(photo_url)
+                        photos.append({'url': photo_url, 'alt': img.get('alt', '')})
+            
             if photos:
                 restaurant_data['photos'] = photos
+                restaurant_data['photos'] = '; '.join(photo_urls[:10])  # Store as semicolon-separated for CSV
                 if detail_logger:
                     detail_logger.log_section_data(url, "PHOTOS", photos, item_count=len(photos))
         
-        # ========== BOOKED TIMES INFO ==========
-        if detail_logger:
-            detail_logger.log_section_extraction(url, "BOOKING_INFO", "STARTED")
+        # ========== BOOKED TODAY / SOCIAL PROOF ==========
         booked_today = soup.select_one('[data-test="icSocialProof"]')
         if booked_today:
             booked_text = booked_today.find_next(string=re.compile('Booked'))
             if booked_text:
+                booked_match = re.search(r'Booked\s+(\d+)\s+times?\s+today', booked_text, re.I)
+                if booked_match:
+                    restaurant_data['booked_today'] = int(booked_match.group(1))
+        
+        # Also try alternative selector
+        if not restaurant_data.get('booked_today'):
+            booked_elem = soup.select_one('span.tVyQYUNnt1Y-')
+            if booked_elem:
+                booked_text = booked_elem.get_text(strip=True)
                 booked_match = re.search(r'Booked\s+(\d+)\s+times?\s+today', booked_text, re.I)
                 if booked_match:
                     restaurant_data['booked_today'] = int(booked_match.group(1))
