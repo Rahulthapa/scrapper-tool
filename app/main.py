@@ -1793,7 +1793,7 @@ async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
                 if html_content:
                     from bs4 import BeautifulSoup
                     soup = BeautifulSoup(html_content, 'html.parser')
-                    scraped_data = await worker_instance.scraper._parse_opentable_restaurant_page(
+                    scraped_data = worker_instance.scraper._parse_opentable_restaurant_page(
                         soup, 
                         request.url, 
                         html_content
@@ -1937,7 +1937,7 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
                     if html_content:
                         from bs4 import BeautifulSoup
                         soup = BeautifulSoup(html_content, 'html.parser')
-                        scraped_data = await worker_instance.scraper._parse_opentable_restaurant_page(
+                        scraped_data = worker_instance.scraper._parse_opentable_restaurant_page(
                             soup,
                             url,
                             html_content
