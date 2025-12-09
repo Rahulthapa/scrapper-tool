@@ -271,18 +271,28 @@ class ScraperWorker:
         
         # If individual page extraction is enabled, use the new process
         if extract_individual_pages and is_restaurant_listing:
+            # Get configuration from job
+            max_restaurants = job.get('max_restaurants')  # None = all restaurants, or specific limit
+            skip_listing_page = True  # Always skip listing page itself (only scrape individual pages)
+            
+            # Determine behavior message
+            if max_restaurants:
+                behavior_msg = f"Will extract URLs and scrape {max_restaurants} individual restaurant page(s)"
+            else:
+                behavior_msg = "Will extract ALL URLs and scrape each individual restaurant page"
+            
             if detail_logger:
                 detail_logger.log_separator(f"EXTRACTING RESTAURANT URLS FROM LISTING PAGE")
                 detail_logger.log_restaurant_processing(url, "LISTING_PAGE_DETECTED", 
-                    "Starting URL extraction - will skip listing page and scrape first extracted URL only")
+                    f"Starting URL extraction - {behavior_msg}")
             
-            # Extract URLs and scrape only the first one (skip listing page)
+            # Extract URLs and visit individual pages
             result = await self._process_restaurant_listing_with_individual_pages(
                 listing_url=url, 
                 use_javascript=use_javascript, 
                 errors=errors,
-                skip_listing_page=True,  # Skip scraping the listing page itself
-                max_restaurants=1  # Only scrape first extracted URL
+                skip_listing_page=skip_listing_page,  # Skip scraping the listing page itself
+                max_restaurants=max_restaurants  # Use job parameter (None = all, or specific limit)
             )
             
             if detail_logger:
@@ -420,21 +430,15 @@ class ScraperWorker:
             if skip_listing_page:
                 logger.info(f"⏭️ SKIPPING listing page scraping - will only scrape extracted restaurant URLs")
             
-            # STEP 2: Skip first extracted URL and start from second (when skip_listing_page is True)
-            if skip_listing_page and len(restaurant_urls) > 1:
-                skipped_url = restaurant_urls[0]
-                restaurant_urls = restaurant_urls[1:]  # Skip first, start from second
-                logger.info(f"⏭️ SKIPPING first extracted URL: {skipped_url}")
-                logger.info(f"📋 Will scrape second URL instead: {restaurant_urls[0] if restaurant_urls else 'N/A'}")
-            elif skip_listing_page and len(restaurant_urls) == 1:
-                logger.warning(f"⚠️ Only 1 URL found, cannot skip first. Will scrape: {restaurant_urls[0]}")
-            
-            # STEP 3: Limit to max_restaurants if specified (for testing - scrape only first N)
+            # STEP 2: Limit to max_restaurants if specified (None = scrape all)
             if max_restaurants and max_restaurants > 0:
-                logger.info(f"⚠️ TEST MODE: Limiting to {max_restaurants} restaurants (out of {len(restaurant_urls)} remaining)")
+                original_count = len(restaurant_urls)
                 restaurant_urls = restaurant_urls[:max_restaurants]
+                logger.info(f"📋 Limiting to {max_restaurants} restaurants (out of {original_count} found)")
                 if restaurant_urls:
-                    logger.info(f"📋 URL to scrape: {restaurant_urls[0]}")
+                    logger.info(f"📋 Will scrape: {restaurant_urls[0] if len(restaurant_urls) == 1 else f'{len(restaurant_urls)} restaurants'}")
+            else:
+                logger.info(f"📋 Will scrape ALL {len(restaurant_urls)} extracted restaurant URLs")
             
             # STEP 3: Create minimal restaurant objects with just URLs
             

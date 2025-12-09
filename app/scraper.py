@@ -2352,8 +2352,12 @@ class WebScraper:
                     java_script_enabled=True
                 )
                 logger.info("✅ Created shared browser instance for all pages")
+                if detail_logger:
+                    detail_logger.log_info("Browser instance created successfully - ready to visit individual pages")
             except Exception as browser_init_error:
-                logger.warning(f"Failed to create shared browser instance: {browser_init_error}")
+                logger.error(f"❌ Failed to create shared browser instance: {browser_init_error}")
+                if detail_logger:
+                    detail_logger.log_error(f"Browser initialization failed: {str(browser_init_error)}", None, browser_init_error)
                 browser_instance = None
                 browser_context = None
                 playwright_manager = None
@@ -2385,12 +2389,22 @@ class WebScraper:
                     try:
                         # Use provided page or create new one from shared context
                         if page is None and browser_context:
+                            logger.info(f"📄 Creating new page from shared browser context for: {url}")
                             page = await browser_context.new_page()
                             page_created = True
+                            logger.info(f"✅ Page created successfully for: {url}")
+                        elif page is None and not browser_context:
+                            logger.error(f"❌ No browser context available - cannot create page for: {url}")
+                            raise Exception("Browser context not available - cannot visit individual page")
                         
                         if page:
+                            logger.info(f"🌐 Navigating to restaurant page: {url}")
+                            if detail_logger:
+                                detail_logger.log_restaurant_processing(url, "NAVIGATING", f"Navigating to {url}")
+                            
                             # Minimal wait - just enough for content to load
                             await page.goto(url, wait_until="domcontentloaded", timeout=30000)  # Reduced from 60s
+                            logger.info(f"✅ Page loaded: {url}")
                             await page.wait_for_timeout(1000)  # Reduced from 2-3s
                             
                             # Quick scroll to trigger lazy loading (if needed)
@@ -2400,7 +2414,9 @@ class WebScraper:
                             except:
                                 pass  # Ignore scroll errors
                             
+                            logger.info(f"📄 Extracting HTML content from: {url}")
                             html_content = await page.content()
+                            logger.info(f"✅ HTML extracted: {len(html_content):,} bytes from {url}")
                             
                             # Close page immediately to free memory
                             if page_created:
@@ -2452,12 +2468,12 @@ class WebScraper:
                 
                 # Use OpenTable-specific parser if it's an OpenTable URL
                 if is_opentable:
-                    logger.info(f"Using OpenTable-specific parser for detailed extraction: {url}")
+                    logger.info(f"🔍 Using OpenTable-specific parser for detailed extraction: {url}")
                     if detail_logger:
                         detail_logger.log_restaurant_processing(url, "PARSING", "Using OpenTable parser")
                     try:
                         opentable_data = self._parse_opentable_restaurant_page(soup, url, html_content)
-                        logger.info(f"OpenTable parser returned {len(opentable_data)} data fields")
+                        logger.info(f"✅ OpenTable parser returned {len(opentable_data)} data fields from {url}")
                         
                         # Merge with existing restaurant data
                         detailed_restaurant = restaurant_data.copy()
