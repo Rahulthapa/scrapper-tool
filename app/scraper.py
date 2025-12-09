@@ -494,22 +494,22 @@ class WebScraper:
                 
                 # Navigate with realistic behavior
                 try:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                    await page.goto(url, wait_until="domcontentloaded", timeout=20000)  # Reduced to 20s
                 except Exception as e:
                     logger.warning(f"Initial page load issue: {e}, continuing...")
                 
-                # Random delay to mimic human behavior
-                await page.wait_for_timeout(random.randint(2000, 4000))
+                # Reduced delay to mimic human behavior (but faster)
+                await page.wait_for_timeout(random.randint(500, 1000))  # Reduced from 2-4s to 0.5-1s
                 
-                # Scroll down to trigger lazy loading
+                # Scroll down to trigger lazy loading (simplified)
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
-                await page.wait_for_timeout(random.randint(1000, 2000))
+                await page.wait_for_timeout(random.randint(300, 600))  # Reduced from 1-2s to 0.3-0.6s
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await page.wait_for_timeout(random.randint(1500, 3000))
+                await page.wait_for_timeout(random.randint(300, 600))  # Reduced from 1.5-3s to 0.3-0.6s
                 
-                # Scroll back up
-                await page.evaluate("window.scrollTo(0, 0)")
-                await page.wait_for_timeout(1000)
+                # Scroll back up (optional, skip to save time)
+                # await page.evaluate("window.scrollTo(0, 0)")
+                # await page.wait_for_timeout(300)
                 
                 # Get page content
                 html_content = await page.content()
@@ -663,20 +663,20 @@ class WebScraper:
                     
                     page.on('response', handle_response)
                 
-                # Navigate to page
-                await page.goto(url, wait_until="networkidle", timeout=60000)
+                # Navigate to page - use domcontentloaded for faster loading
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)  # Reduced to 20s, faster wait strategy
                 
-                # Wait for data to load
-                await page.wait_for_timeout(wait_time * 1000)
+                # Wait for data to load (but cap at reasonable time)
+                actual_wait = min(wait_time, 3) * 1000  # Cap at 3 seconds max
+                await page.wait_for_timeout(actual_wait)
                 
-                # Scroll to trigger lazy loading
+                # Scroll to trigger lazy loading (optimized)
                 if scroll:
                     await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
-                    await page.wait_for_timeout(2000)
+                    await page.wait_for_timeout(500)  # Reduced to 500ms
                     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await page.wait_for_timeout(2000)
-                    await page.evaluate("window.scrollTo(0, 0)")
-                    await page.wait_for_timeout(1000)
+                    await page.wait_for_timeout(500)  # Reduced to 500ms
+                    # Skip scroll back up to save time
                 
                 # Extract data from JavaScript variables
                 js_variables = await page.evaluate("""
@@ -1869,8 +1869,8 @@ class WebScraper:
                     browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                     context = await browser.new_context()
                     page = await context.new_page()
-                    await page.goto(listing_url, wait_until="networkidle", timeout=30000)
-                    await page.wait_for_timeout(3000)
+                    await page.goto(listing_url, wait_until="domcontentloaded", timeout=20000)  # Faster wait strategy
+                    await page.wait_for_timeout(1000)  # Reduced to 1s
                     html_content = await page.content()
                     await context.close()
                     await browser.close()
@@ -1979,19 +1979,19 @@ class WebScraper:
                     page = await context.new_page()
                     
                     logger.info(f"Loading listing page with Playwright: {listing_url}")
-                    await page.goto(listing_url, wait_until="domcontentloaded", timeout=30000)  # Reduced from 60s
+                    await page.goto(listing_url, wait_until="domcontentloaded", timeout=20000)  # Reduced to 20s
                     
                     # Wait for content to load - OpenTable uses dynamic loading
-                    await page.wait_for_timeout(2000)  # Reduced from 5s
+                    await page.wait_for_timeout(1000)  # Reduced to 1s
                     
                     # Scroll to load more content (OpenTable uses infinite scroll)
                     logger.info("Scrolling to load restaurant content...")
-                    for i in range(2):  # Reduced from 3 to 2 scrolls
+                    for i in range(2):  # Keep 2 scrolls but reduce wait
                         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        await page.wait_for_timeout(1000)  # Reduced from 2s to 1s
+                        await page.wait_for_timeout(500)  # Reduced to 500ms
                     
                     # Wait a bit more for lazy-loaded content
-                    await page.wait_for_timeout(1000)  # Reduced from 3s to 1s
+                    await page.wait_for_timeout(500)  # Reduced to 500ms
                     
                     # Extract URLs from JavaScript - Enhanced for OpenTable
                     js_urls = await page.evaluate("""
@@ -2427,16 +2427,17 @@ class WebScraper:
                                 detail_logger.log_restaurant_processing(url, "NAVIGATING", f"Navigating to {url}")
                             
                             # Minimal wait - just enough for content to load
-                            await page.goto(url, wait_until="domcontentloaded", timeout=30000)  # Reduced from 60s
+                            await page.goto(url, wait_until="domcontentloaded", timeout=20000)  # Reduced to 20s
                             logger.info(f"✅ Page loaded: {url}")
-                            await page.wait_for_timeout(1000)  # Reduced from 2-3s
+                            await page.wait_for_timeout(500)  # Reduced to 500ms - most content loads with domcontentloaded
                             
-                            # Quick scroll to trigger lazy loading (if needed)
-                            try:
-                                await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 3)")
-                                await page.wait_for_timeout(500)  # Reduced wait
-                            except:
-                                pass  # Ignore scroll errors
+                            # Quick scroll to trigger lazy loading (if needed) - only if OpenTable
+                            if is_opentable:
+                                try:
+                                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 3)")
+                                    await page.wait_for_timeout(300)  # Reduced to 300ms
+                                except:
+                                    pass  # Ignore scroll errors
                             
                             logger.info(f"📄 Extracting HTML content from: {url}")
                             html_content = await page.content()
@@ -2725,7 +2726,7 @@ class WebScraper:
                 
                 # Small delay between pages to avoid overwhelming the server
                 if idx < len(restaurant_urls) - 1:  # Don't delay after last page
-                    await asyncio.sleep(0.5)  # 500ms delay between pages
+                    await asyncio.sleep(0.2)  # Reduced to 200ms delay between pages
                     
             except Exception as e:
                 failed_count += 1
@@ -2738,7 +2739,7 @@ class WebScraper:
                     retry_success = False
                     for retry in range(max_retries):
                         try:
-                            await asyncio.sleep(2 ** retry)  # Exponential backoff
+                            await asyncio.sleep(1 + retry)  # Linear backoff (1s, 2s) instead of exponential (1s, 2s, 4s)
                             logger.info(f"🔄 Retry {retry+1}/{max_retries} for {url}")
                             result = await extract_single_restaurant(restaurant_data, url, idx, page=None)
                             processed_count += 1
