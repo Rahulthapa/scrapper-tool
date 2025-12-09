@@ -1773,24 +1773,72 @@ async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
             if detail_logger:
                 detail_logger.log_restaurant_processing(request.url, "SCRAPING", "Starting scrape with Playwright")
             
-            # Scrape the URL
-            scraped_data = await worker_instance.scraper.scrape(
-                request.url,
-                use_javascript=True  # Always use JS for restaurant pages
-            )
-            
-            if detail_logger:
-                detail_logger.log_restaurant_processing(request.url, "SCRAPE_SUCCESS", 
-                    f"Scraped {len(str(scraped_data))} bytes of data")
-            
-            # Parse with OpenTable parser if applicable
+            # For OpenTable URLs, extract HTML directly and use the specialized parser
             if 'opentable.com' in request.url.lower() and '/r/' in request.url.lower():
                 if detail_logger:
-                    detail_logger.log_restaurant_processing(request.url, "PARSING", "Using OpenTable parser")
+                    detail_logger.log_restaurant_processing(request.url, "PARSING", "Using OpenTable parser with direct HTML extraction")
                 
-                # Get HTML content and create BeautifulSoup object
-                html_content = scraped_data.get('text_content', '') or scraped_data.get('html_content', '')
-                if html_content:
+                # Extract HTML directly using Playwright (similar to extract_single_restaurant)
+                html_content = None
+                from playwright.async_api import async_playwright
+                import random
+                
+                try:
+                    async with async_playwright() as p:
+                        browser = await p.chromium.launch(
+                            headless=True,
+                            args=[
+                                '--disable-blink-features=AutomationControlled',
+                                '--disable-dev-shm-usage',
+                                '--no-sandbox',
+                                '--disable-setuid-sandbox',
+                            ]
+                        )
+                        
+                        context = await browser.new_context(
+                            viewport={'width': 1920, 'height': 1080},
+                            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                            locale='en-US',
+                            timezone_id='America/New_York',
+                        )
+                        
+                        page = await context.new_page()
+                        
+                        # Add stealth scripts
+                        await page.add_init_script("""
+                            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                            window.chrome = { runtime: {} };
+                        """)
+                        
+                        # Navigate and wait for content
+                        await page.goto(request.url, wait_until="domcontentloaded", timeout=15000)
+                        await page.wait_for_timeout(300)  # Wait for dynamic content
+                        
+                        # Scroll to trigger lazy loading
+                        try:
+                            await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 3)")
+                            await page.wait_for_timeout(200)
+                        except:
+                            pass
+                        
+                        # Get full HTML content
+                        html_content = await page.content()
+                        
+                        await context.close()
+                        await browser.close()
+                        
+                        if detail_logger:
+                            detail_logger.log_restaurant_processing(request.url, "HTML_FETCHED", 
+                                f"Extracted {len(html_content):,} bytes of HTML")
+                
+                except Exception as html_error:
+                    logger.error(f"Failed to extract HTML with Playwright: {html_error}")
+                    if detail_logger:
+                        detail_logger.log_url_error(request.url, f"HTML extraction failed: {str(html_error)}")
+                    raise Exception(f"HTML extraction failed: {str(html_error)}")
+                
+                # Parse with OpenTable parser
+                if html_content and len(html_content) > 1000:  # Ensure we have meaningful content
                     from bs4 import BeautifulSoup
                     soup = BeautifulSoup(html_content, 'html.parser')
                     scraped_data = worker_instance.scraper._parse_opentable_restaurant_page(
@@ -1802,9 +1850,24 @@ async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
                         detail_logger.log_restaurant_processing(request.url, "PARSE_SUCCESS", 
                             f"Parsed {len(scraped_data)} data fields")
                 else:
-                    logger.warning(f"No HTML content found in scraped_data for {request.url}")
+                    logger.warning(f"HTML content too small ({len(html_content) if html_content else 0} bytes) for {request.url}")
                     if detail_logger:
-                        detail_logger.log_warning(f"No HTML content found for parsing", request.url)
+                        detail_logger.log_warning(f"HTML content too small for parsing", request.url)
+                    # Fallback to basic scrape
+                    scraped_data = await worker_instance.scraper.scrape(
+                        request.url,
+                        use_javascript=True
+                    )
+            else:
+                # For non-OpenTable URLs, use standard scraper
+                scraped_data = await worker_instance.scraper.scrape(
+                    request.url,
+                    use_javascript=True
+                )
+            
+            if detail_logger:
+                detail_logger.log_restaurant_processing(request.url, "SCRAPE_SUCCESS", 
+                    f"Scraped {len(str(scraped_data))} bytes of data")
             
             # Update status to scraped and save data
             await storage_instance.update_url_status(
@@ -1925,16 +1988,72 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
                 if detail_logger:
                     detail_logger.log_restaurant_processing(url, "SCRAPING", f"URL {idx}/{len(request.urls)}")
                 
-                # Scrape the URL
-                scraped_data = await worker_instance.scraper.scrape(
-                    url,
-                    use_javascript=True
-                )
-                
-                # Parse with OpenTable parser if applicable
+                # For OpenTable URLs, extract HTML directly and use the specialized parser
                 if 'opentable.com' in url.lower() and '/r/' in url.lower():
-                    html_content = scraped_data.get('text_content', '') or scraped_data.get('html_content', '')
-                    if html_content:
+                    if detail_logger:
+                        detail_logger.log_restaurant_processing(url, "PARSING", "Using OpenTable parser with direct HTML extraction")
+                    
+                    # Extract HTML directly using Playwright
+                    html_content = None
+                    from playwright.async_api import async_playwright
+                    import random
+                    
+                    try:
+                        async with async_playwright() as p:
+                            browser = await p.chromium.launch(
+                                headless=True,
+                                args=[
+                                    '--disable-blink-features=AutomationControlled',
+                                    '--disable-dev-shm-usage',
+                                    '--no-sandbox',
+                                    '--disable-setuid-sandbox',
+                                ]
+                            )
+                            
+                            context = await browser.new_context(
+                                viewport={'width': 1920, 'height': 1080},
+                                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                                locale='en-US',
+                                timezone_id='America/New_York',
+                            )
+                            
+                            page = await context.new_page()
+                            
+                            # Add stealth scripts
+                            await page.add_init_script("""
+                                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                                window.chrome = { runtime: {} };
+                            """)
+                            
+                            # Navigate and wait for content
+                            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                            await page.wait_for_timeout(300)  # Wait for dynamic content
+                            
+                            # Scroll to trigger lazy loading
+                            try:
+                                await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 3)")
+                                await page.wait_for_timeout(200)
+                            except:
+                                pass
+                            
+                            # Get full HTML content
+                            html_content = await page.content()
+                            
+                            await context.close()
+                            await browser.close()
+                            
+                            if detail_logger:
+                                detail_logger.log_restaurant_processing(url, "HTML_FETCHED", 
+                                    f"Extracted {len(html_content):,} bytes of HTML")
+                    
+                    except Exception as html_error:
+                        logger.error(f"Failed to extract HTML with Playwright for {url}: {html_error}")
+                        if detail_logger:
+                            detail_logger.log_url_error(url, f"HTML extraction failed: {str(html_error)}")
+                        raise Exception(f"HTML extraction failed: {str(html_error)}")
+                    
+                    # Parse with OpenTable parser
+                    if html_content and len(html_content) > 1000:  # Ensure we have meaningful content
                         from bs4 import BeautifulSoup
                         soup = BeautifulSoup(html_content, 'html.parser')
                         scraped_data = worker_instance.scraper._parse_opentable_restaurant_page(
@@ -1942,10 +2061,24 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
                             url,
                             html_content
                         )
-                    else:
-                        logger.warning(f"No HTML content found in scraped_data for {url}")
                         if detail_logger:
-                            detail_logger.log_warning(f"No HTML content found for parsing", url)
+                            detail_logger.log_restaurant_processing(url, "PARSE_SUCCESS", 
+                                f"Parsed {len(scraped_data)} data fields")
+                    else:
+                        logger.warning(f"HTML content too small ({len(html_content) if html_content else 0} bytes) for {url}")
+                        if detail_logger:
+                            detail_logger.log_warning(f"HTML content too small for parsing", url)
+                        # Fallback to basic scrape
+                        scraped_data = await worker_instance.scraper.scrape(
+                            url,
+                            use_javascript=True
+                        )
+                else:
+                    # For non-OpenTable URLs, use standard scraper
+                    scraped_data = await worker_instance.scraper.scrape(
+                        url,
+                        use_javascript=True
+                    )
                 
                 # Update status and save data
                 await storage_instance.update_url_status(
