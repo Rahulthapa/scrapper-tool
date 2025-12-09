@@ -1730,13 +1730,24 @@ async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
         try:
             from app.scraper_logger import get_scraper_logger
             detail_logger = get_scraper_logger()
-        except:
+            logger.info(f"Detail logger initialized: {detail_logger.log_file if detail_logger else 'None'}")
+        except Exception as logger_error:
+            logger.error(f"Failed to initialize detail logger: {logger_error}", exc_info=True)
             detail_logger = None
         
         if detail_logger:
-            detail_logger.log_separator(f"SCRAPING SINGLE URL: {request.url}")
-            detail_logger.log_url_visit(request.url, status="STARTING")
-            detail_logger.log_restaurant_processing(request.url, "SCRAPE_START", f"Job ID: {job_id}")
+            try:
+                logger.info(f"Writing to log file: {detail_logger.log_file}")
+                detail_logger.log_separator(f"SCRAPING SINGLE URL: {request.url}")
+                detail_logger.log_url_visit(request.url, status="STARTING")
+                detail_logger.log_restaurant_processing(request.url, "SCRAPE_START", f"Job ID: {job_id}")
+                # Force flush to ensure logs are written
+                detail_logger.flush()
+                logger.info(f"Initial log entries written to {detail_logger.log_file}")
+            except Exception as log_error:
+                logger.error(f"Failed to write initial log entries: {log_error}", exc_info=True)
+        else:
+            logger.warning("Detail logger is None - logging will not work")
         
         # Check if job exists
         job = await storage_instance.get_job(job_id)
@@ -1880,6 +1891,7 @@ async def scrape_single_url(job_id: str, request: ScrapeUrlRequest):
             if detail_logger:
                 detail_logger.log_restaurant_processing(request.url, "SAVED", "Data saved to database")
                 detail_logger.log_url_complete(request.url, html_length=len(str(scraped_data)))
+                detail_logger.flush()  # Ensure logs are written
             
             return ScrapeUrlResponse(
                 url=request.url,
@@ -1938,12 +1950,23 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
         try:
             from app.scraper_logger import get_scraper_logger
             detail_logger = get_scraper_logger()
-        except:
+            logger.info(f"Detail logger initialized: {detail_logger.log_file if detail_logger else 'None'}")
+        except Exception as logger_error:
+            logger.error(f"Failed to initialize detail logger: {logger_error}", exc_info=True)
             detail_logger = None
         
         if detail_logger:
-            detail_logger.log_separator(f"BULK SCRAPING: {len(request.urls)} URLs")
-            detail_logger.log_info(f"Starting bulk scrape for job {job_id}")
+            try:
+                logger.info(f"Writing to log file: {detail_logger.log_file}")
+                detail_logger.log_separator(f"BULK SCRAPING: {len(request.urls)} URLs")
+                detail_logger.log_info(f"Starting bulk scrape for job {job_id}")
+                # Force flush to ensure logs are written
+                detail_logger.flush()
+                logger.info(f"Initial log entries written to {detail_logger.log_file}")
+            except Exception as log_error:
+                logger.error(f"Failed to write initial log entries: {log_error}", exc_info=True)
+        else:
+            logger.warning("Detail logger is None - logging will not work")
         
         # Check if job exists
         job = await storage_instance.get_job(job_id)
@@ -2090,6 +2113,7 @@ async def scrape_multiple_urls(job_id: str, request: ScrapeUrlsRequest):
                 
                 if detail_logger:
                     detail_logger.log_restaurant_processing(url, "SCRAPED", "Successfully scraped and saved")
+                    detail_logger.flush()  # Ensure logs are written
                 
                 scraped.append(ScrapeUrlResponse(
                     url=url,

@@ -55,9 +55,16 @@ class ScraperLogger:
         self.logger.addHandler(file_handler)
         self.logger.addHandler(console_handler)
         
+        # Store handlers for flushing
+        self.file_handler = file_handler
+        self.console_handler = console_handler
+        
         self.logger.info("=" * 80)
         self.logger.info(f"Scraper logging started - Log file: {log_file}")
         self.logger.info("=" * 80)
+        
+        # Flush immediately to ensure file is created
+        file_handler.flush()
     
     def log_url_visit(self, url: str, method: str = "GET", status: str = "STARTED"):
         """Log when a URL is being visited"""
@@ -160,6 +167,19 @@ class ScraperLogger:
         if exception:
             import traceback
             self.logger.debug(f"[ERROR TRACEBACK]\n{traceback.format_exc()}")
+        # Flush after error to ensure it's written
+        self.flush()
+    
+    def flush(self):
+        """Flush all log handlers to ensure logs are written to disk"""
+        try:
+            if hasattr(self, 'file_handler'):
+                self.file_handler.flush()
+            if hasattr(self, 'console_handler'):
+                self.console_handler.flush()
+        except Exception as e:
+            # Don't fail if flush fails
+            pass
 
 
 # Global logger instance
