@@ -2363,7 +2363,8 @@ class WebScraper:
             start_time = time.time()
             page_created = False
             try:
-                logger.info(f"Extracting detailed data from: {url}")
+                logger.info(f"🔍 Extracting detailed data from: {url}")
+                logger.info(f"📄 Opening restaurant page: {url}")
                 if detail_logger:
                     detail_logger.log_separator(f"PROCESSING RESTAURANT PAGE")
                     detail_logger.log_url_visit(url, status="STARTED")
@@ -2616,13 +2617,19 @@ class WebScraper:
         total_urls = len(restaurant_urls)
         
         logger.info(f"📊 Processing {total_urls} restaurant pages SEQUENTIALLY (one at a time)...")
+        logger.info(f"📋 Restaurant URLs to visit: {restaurant_urls[:5] if len(restaurant_urls) > 5 else restaurant_urls}...")
         if detail_logger:
             detail_logger.log_info(f"Starting sequential processing of {total_urls} pages")
+            detail_logger.log_info(f"URLs to visit: {[url for _, url in restaurant_urls[:10]]}")
         
         # Process each restaurant URL one at a time
         for idx, (restaurant_data, url) in enumerate(restaurant_urls):
             try:
                 logger.info(f"🔄 [{idx+1}/{total_urls}] Processing: {url[:60]}...")
+                logger.info(f"🌐 VISITING INDIVIDUAL RESTAURANT PAGE: {url}")
+                if detail_logger:
+                    detail_logger.log_separator(f"VISITING RESTAURANT PAGE {idx+1}/{total_urls}")
+                    detail_logger.log_url_visit(url, status="STARTING")
                 
                 # Extract data from this restaurant page
                 result = await extract_single_restaurant(restaurant_data, url, idx, page=None)
@@ -2632,7 +2639,7 @@ class WebScraper:
                 progress = (current / total_urls) * 100
                 elapsed = time.time() - start_time
                 rate = current / elapsed if elapsed > 0 else 0
-                remaining = (total - current) / rate if rate > 0 else 0
+                remaining = (total_urls - current) / rate if rate > 0 else 0
                 
                 logger.info(f"✅ [{current}/{total_urls}] ({progress:.1f}%) | {url[:60]}... | Rate: {rate:.1f}/s | ETA: {remaining:.0f}s")
                 if detail_logger:
