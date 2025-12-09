@@ -163,6 +163,30 @@ function UrlList({ jobId, urls: initialUrls, API_BASE_URL, onScraped }) {
     await handleScrapeSelected()
   }
 
+  const handleExport = async (format) => {
+    if (!jobId || scrapedCount === 0) return
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/jobs/${jobId}/export?format=${format}`)
+      if (!response.ok) {
+        throw new Error('Export failed')
+      }
+      
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `scraped_restaurants_${jobId}.${format === 'excel' ? 'xlsx' : format}`
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+    } catch (error) {
+      console.error('Export error:', error)
+      setError(`Failed to export: ${error.message}`)
+    }
+  }
+
   const getStatusBadge = (status) => {
     const badges = {
       pending: { text: 'Pending', class: 'badge-pending' },
@@ -189,6 +213,44 @@ function UrlList({ jobId, urls: initialUrls, API_BASE_URL, onScraped }) {
           {failedCount > 0 && <span className="stat failed">Failed: {failedCount}</span>}
         </div>
       </div>
+
+      {scrapedCount > 0 && (
+        <div className="export-section">
+          <h3>Export Scraped Data ({scrapedCount} restaurants)</h3>
+          <div className="export-buttons">
+            <button 
+              className="export-btn" 
+              onClick={() => handleExport('json')}
+              title="Export as JSON"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+              </svg>
+              JSON
+            </button>
+            <button 
+              className="export-btn" 
+              onClick={() => handleExport('csv')}
+              title="Export as CSV"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+              </svg>
+              CSV
+            </button>
+            <button 
+              className="export-btn" 
+              onClick={() => handleExport('excel')}
+              title="Export as Excel"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+              </svg>
+              Excel
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="url-list-actions">
         <button

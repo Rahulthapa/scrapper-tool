@@ -213,3 +213,48 @@
   color: #666;
 }
 
+.export-section {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  background: #f8f9fa;
+  border-radius: 4px;
+  border: 1px solid #dee2e6;
+}
+
+.export-section h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1rem;
+  color: #333;
+  font-weight: 600;
+}
+
+.export-buttons {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.export-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  background: #28a745;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.export-btn:hover {
+  background: #218838;
+}
+
+.export-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
