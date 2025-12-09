@@ -2318,6 +2318,7 @@ class WebScraper:
         
         # OPTIMIZATION: Create a single browser instance to reuse across all pages
         # This dramatically reduces memory usage (from ~200MB per page to ~200MB total)
+        browser_instance = None
         browser_context = None
         playwright_manager = None
         
@@ -2328,7 +2329,7 @@ class WebScraper:
                 playwright_manager = async_playwright()
                 p = await playwright_manager.__aenter__()
                 # Minimal browser settings to reduce memory
-                browser = await p.chromium.launch(
+                browser_instance = await p.chromium.launch(
                     headless=True,
                     args=[
                         '--no-sandbox',
@@ -2345,7 +2346,7 @@ class WebScraper:
                     ]
                 )
                 # Simplified context - minimal settings
-                browser_context = await browser.new_context(
+                browser_context = await browser_instance.new_context(
                     viewport={'width': 1280, 'height': 720},  # Smaller viewport
                     user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                     java_script_enabled=True
@@ -2353,6 +2354,7 @@ class WebScraper:
                 logger.info("✅ Created shared browser instance for all pages")
             except Exception as browser_init_error:
                 logger.warning(f"Failed to create shared browser instance: {browser_init_error}")
+                browser_instance = None
                 browser_context = None
                 playwright_manager = None
         
@@ -2610,28 +2612,31 @@ class WebScraper:
         start_time = time.time()
         results = []
         
-        logger.info(f"📊 Processing {len(restaurant_urls)} restaurant pages SEQUENTIALLY (one at a time)...")
+        # Use the actual count of URLs to process
+        total_urls = len(restaurant_urls)
+        
+        logger.info(f"📊 Processing {total_urls} restaurant pages SEQUENTIALLY (one at a time)...")
         if detail_logger:
-            detail_logger.log_info(f"Starting sequential processing of {len(restaurant_urls)} pages")
+            detail_logger.log_info(f"Starting sequential processing of {total_urls} pages")
         
         # Process each restaurant URL one at a time
         for idx, (restaurant_data, url) in enumerate(restaurant_urls):
             try:
-                logger.info(f"🔄 [{idx+1}/{len(restaurant_urls)}] Processing: {url[:60]}...")
+                logger.info(f"🔄 [{idx+1}/{total_urls}] Processing: {url[:60]}...")
                 
                 # Extract data from this restaurant page
                 result = await extract_single_restaurant(restaurant_data, url, idx, page=None)
                 
                 processed_count += 1
                 current = processed_count
-                progress = (current / total) * 100
+                progress = (current / total_urls) * 100
                 elapsed = time.time() - start_time
                 rate = current / elapsed if elapsed > 0 else 0
                 remaining = (total - current) / rate if rate > 0 else 0
                 
-                logger.info(f"✅ [{current}/{total}] ({progress:.1f}%) | {url[:60]}... | Rate: {rate:.1f}/s | ETA: {remaining:.0f}s")
+                logger.info(f"✅ [{current}/{total_urls}] ({progress:.1f}%) | {url[:60]}... | Rate: {rate:.1f}/s | ETA: {remaining:.0f}s")
                 if detail_logger:
-                    detail_logger.log_info(f"Progress: {current}/{total} ({progress:.1f}%) | Rate: {rate:.1f} pages/sec")
+                    detail_logger.log_info(f"Progress: {current}/{total_urls} ({progress:.1f}%) | Rate: {rate:.1f} pages/sec")
                 
                 # CRITICAL: Save result immediately after each page is scraped
                 # This ensures data is saved incrementally and reduces memory usage
@@ -2644,7 +2649,7 @@ class WebScraper:
                         if not result.get('url'):
                             result['url'] = url
                         await storage.save_results(job_id, [result])
-                        logger.info(f"💾 Saved result {current}/{total} immediately for {url[:50]}...")
+                        logger.info(f"💾 Saved result {current}/{total_urls} immediately for {url[:50]}...")
                     except Exception as save_error:
                         logger.warning(f"Failed to save incrementally: {save_error}")
                 
@@ -2657,7 +2662,7 @@ class WebScraper:
                     
             except Exception as e:
                 failed_count += 1
-                logger.error(f"❌ Failed [{idx+1}/{total}]: {url} | Error: {str(e)[:100]}")
+                logger.error(f"❌ Failed [{idx+1}/{total_urls}]: {url} | Error: {str(e)[:100]}")
                 if detail_logger:
                     detail_logger.log_error(f"Failed to extract: {str(e)}", url, e)
                 
@@ -2756,26 +2761,26 @@ class WebScraper:
         # Add restaurants that didn't have URLs (but only if we have fewer results than expected)
         if len(detailed_restaurants) < len(restaurants):
             processed_urls = {r.get('url', '').lower() for r in detailed_restaurants if r.get('url')}
-        processed_names = {r.get('name', '').lower() for r in detailed_restaurants if r.get('name')}
-        for restaurant in restaurants:
+            processed_names = {r.get('name', '').lower() for r in detailed_restaurants if r.get('name')}
+            for restaurant in restaurants:
                 # Only add if not already processed (by URL or name)
                 restaurant_url = restaurant.get('url', '').lower()
                 restaurant_name = restaurant.get('name', '').lower()
                 if restaurant_url not in processed_urls and restaurant_name not in processed_names:
-                detailed_restaurants.append(restaurant)
+                    detailed_restaurants.append(restaurant)
         
         total_time = time.time() - start_time
-        final_failed = failed_count['value']
-        success_count = len(detailed_restaurants) - final_failed
+        final_failed = failed_count
+        success_count = processed_count
         
         logger.info(f"✅ Extraction complete!")
-        logger.info(f"   📊 Total: {total} | Success: {success_count} | Failed: {final_failed}")
+        logger.info(f"   📊 Total: {total_urls} | Success: {success_count} | Failed: {final_failed}")
         if total_time > 0:
             logger.info(f"   ⏱️  Time: {total_time:.1f}s | Rate: {success_count/total_time:.2f} pages/sec")
         
         if detail_logger:
             detail_logger.log_separator(f"BATCH EXTRACTION COMPLETE")
-            detail_logger.log_info(f"Total: {total} | Success: {success_count} | Failed: {final_failed}")
+            detail_logger.log_info(f"Total: {total_urls} | Success: {success_count} | Failed: {final_failed}")
             if total_time > 0:
                 detail_logger.log_info(f"Time: {total_time:.1f}s | Rate: {success_count/total_time:.2f} pages/sec")
             detail_logger.log_separator()
@@ -2785,6 +2790,9 @@ class WebScraper:
             if browser_context:
                 await browser_context.close()
                 logger.info("✅ Closed shared browser context")
+            if browser_instance:
+                await browser_instance.close()
+                logger.info("✅ Closed shared browser instance")
             if playwright_manager:
                 await playwright_manager.__aexit__(None, None, None)
                 logger.info("✅ Stopped Playwright instance")
