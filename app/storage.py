@@ -3,6 +3,8 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 import os
 import logging
+import socket
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -38,18 +40,72 @@ class Storage:
             )
             raise ValueError(error_msg)
 
+        # Validate SUPABASE_URL format and DNS
+        parsed_url = None
+        hostname = None
+        try:
+            parsed_url = urlparse(supabase_url)
+            if not parsed_url.scheme or not parsed_url.netloc:
+                raise ValueError(f"Invalid SUPABASE_URL format: {supabase_url}. Expected format: https://your-project.supabase.co")
+            
+            # Try to resolve the hostname to check DNS
+            hostname = parsed_url.hostname
+            try:
+                socket.gethostbyname(hostname)
+                logger.debug(f"Successfully resolved hostname: {hostname}")
+            except socket.gaierror as dns_error:
+                error_msg = (
+                    f"DNS resolution failed for Supabase hostname '{hostname}'.\n"
+                    f"This usually means:\n"
+                    f"  1. The SUPABASE_URL is incorrect or contains a typo\n"
+                    f"  2. There's no internet connection\n"
+                    f"  3. DNS servers cannot resolve the hostname\n\n"
+                    f"Current SUPABASE_URL: {supabase_url}\n"
+                    f"Please verify your SUPABASE_URL is correct and you have internet connectivity."
+                )
+                logger.error(error_msg)
+                raise ValueError(error_msg) from dns_error
+        except ValueError as e:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not validate SUPABASE_URL format: {str(e)}")
+
         # Create Supabase client
         # Using positional arguments to avoid any proxy-related issues
         try:
             self.client: Client = create_client(supabase_url, supabase_key)
-        except TypeError as e:
-            if 'proxy' in str(e).lower():
-                # Fallback: try with explicit keyword arguments
-                self.client: Client = create_client(
-                    supabase_url=supabase_url,
-                    supabase_key=supabase_key
+            logger.info("Successfully created Supabase client")
+        except (TypeError, OSError, socket.gaierror) as e:
+            if isinstance(e, (OSError, socket.gaierror)) and ("Name or service not known" in str(e) or "Errno -2" in str(e)):
+                hostname_str = hostname if hostname else "unknown"
+                error_msg = (
+                    f"DNS resolution error when connecting to Supabase.\n"
+                    f"Hostname: {hostname_str}\n"
+                    f"SUPABASE_URL: {supabase_url}\n\n"
+                    f"This error usually means:\n"
+                    f"  1. The SUPABASE_URL hostname cannot be resolved\n"
+                    f"  2. There's no internet connection\n"
+                    f"  3. DNS servers are not accessible\n\n"
+                    f"Please check:\n"
+                    f"  - Your internet connection\n"
+                    f"  - That SUPABASE_URL is correct (no typos)\n"
+                    f"  - Your DNS settings"
                 )
+                logger.error(error_msg)
+                raise ValueError(error_msg) from e
+            elif 'proxy' in str(e).lower():
+                # Fallback: try with explicit keyword arguments
+                try:
+                    self.client: Client = create_client(
+                        supabase_url=supabase_url,
+                        supabase_key=supabase_key
+                    )
+                    logger.info("Successfully created Supabase client (with keyword args)")
+                except Exception as e2:
+                    logger.error(f"Failed to create Supabase client even with keyword args: {str(e2)}")
+                    raise
             else:
+                logger.error(f"Failed to create Supabase client: {str(e)}")
                 raise
 
     async def create_job(self, job_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -57,6 +113,21 @@ class Storage:
         try:
             response = self.client.table('scrape_jobs').insert(job_data).execute()
             return response.data[0] if response.data else None
+        except (OSError, socket.gaierror) as e:
+            # Handle DNS/network errors
+            if "Name or service not known" in str(e) or "Errno -2" in str(e):
+                error_msg = (
+                    f"DNS resolution error when connecting to database.\n"
+                    f"This usually means:\n"
+                    f"  1. The SUPABASE_URL hostname cannot be resolved\n"
+                    f"  2. There's no internet connection\n"
+                    f"  3. DNS servers are not accessible\n\n"
+                    f"Please check your internet connection and SUPABASE_URL configuration."
+                )
+                logger.error(f"DNS error creating job: {error_msg}")
+                raise Exception(error_msg) from e
+            else:
+                raise
         except Exception as e:
             # Extract error message from Supabase exception
             error_msg = str(e)
@@ -70,6 +141,18 @@ class Storage:
                     error_msg = e.args[0].get('message', str(e))
                 else:
                     error_msg = str(e.args[0])
+            
+            # Check for DNS errors in the error message
+            if "Name or service not known" in error_msg or "Errno -2" in error_msg:
+                error_msg = (
+                    f"DNS resolution error when connecting to database.\n"
+                    f"Original error: {error_msg}\n\n"
+                    f"This usually means:\n"
+                    f"  1. The SUPABASE_URL hostname cannot be resolved\n"
+                    f"  2. There's no internet connection\n"
+                    f"  3. DNS servers are not accessible\n\n"
+                    f"Please check your internet connection and SUPABASE_URL configuration."
+                )
             
             # Log the error with full details
             logger.error(f"Failed to create job in database: {error_msg}")
