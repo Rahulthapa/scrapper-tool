@@ -111,8 +111,31 @@ class Storage:
     async def create_job(self, job_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new scraping job"""
         try:
-            response = self.client.table('scrape_jobs').insert(job_data).execute()
-            return response.data[0] if response.data else None
+            # Ensure all values in job_data are JSON serializable
+            serializable_job_data = {}
+            for key, value in job_data.items():
+                if isinstance(value, (str, int, float, bool, type(None))):
+                    serializable_job_data[key] = value
+                elif hasattr(value, 'isoformat'):  # datetime objects
+                    serializable_job_data[key] = value.isoformat() if value else None
+                else:
+                    serializable_job_data[key] = str(value)
+            
+            response = self.client.table('scrape_jobs').insert(serializable_job_data).execute()
+            if not response.data:
+                raise ValueError("Database returned no data after insert")
+            
+            # Ensure returned data is serializable
+            job_result = response.data[0]
+            # Convert any datetime objects to strings
+            serializable_result = {}
+            for key, value in job_result.items():
+                if hasattr(value, 'isoformat'):  # datetime objects
+                    serializable_result[key] = value.isoformat() if value else None
+                else:
+                    serializable_result[key] = value
+            
+            return serializable_result
         except (OSError, socket.gaierror) as e:
             # Handle DNS/network errors
             if "Name or service not known" in str(e) or "Errno -2" in str(e):
@@ -125,22 +148,38 @@ class Storage:
                     f"Please check your internet connection and SUPABASE_URL configuration."
                 )
                 logger.error(f"DNS error creating job: {error_msg}")
-                raise Exception(error_msg) from e
+                raise ValueError(error_msg) from e
             else:
-                raise
+                error_msg = f"Network error: {str(e)}"
+                logger.error(f"Network error creating job: {error_msg}")
+                raise ValueError(error_msg) from e
         except Exception as e:
             # Extract error message from Supabase exception
-            error_msg = str(e)
+            # Ensure we only use serializable data
+            error_msg = None
             
-            # Try to extract more details from the exception if it's a dict-like error
-            if hasattr(e, 'message'):
-                error_msg = str(e.message)
-            elif hasattr(e, 'args') and e.args:
-                # Supabase errors often have dict-like args
-                if isinstance(e.args[0], dict):
-                    error_msg = e.args[0].get('message', str(e))
+            # Try to extract error message from various exception formats
+            try:
+                if hasattr(e, 'message'):
+                    error_msg = str(e.message)
+                elif hasattr(e, 'args') and e.args:
+                    # Supabase errors often have dict-like args
+                    if isinstance(e.args[0], dict):
+                        # Extract only string values from dict
+                        msg = e.args[0].get('message') or e.args[0].get('error') or str(e.args[0])
+                        error_msg = str(msg) if msg else str(e)
+                    else:
+                        error_msg = str(e.args[0])
                 else:
-                    error_msg = str(e.args[0])
+                    error_msg = str(e)
+            except Exception as parse_error:
+                # If we can't parse the error, use a generic message
+                logger.warning(f"Could not parse error message: {parse_error}")
+                error_msg = f"Database error: {type(e).__name__}"
+            
+            # Ensure error_msg is a simple string (JSON serializable)
+            if not isinstance(error_msg, str):
+                error_msg = str(error_msg)
             
             # Check for DNS errors in the error message
             if "Name or service not known" in error_msg or "Errno -2" in error_msg:
@@ -154,13 +193,13 @@ class Storage:
                     f"Please check your internet connection and SUPABASE_URL configuration."
                 )
             
-            # Log the error with full details
+            # Log the error with full details (but don't include in exception)
             logger.error(f"Failed to create job in database: {error_msg}")
             logger.error(f"Job data attempted: {job_data}")
             logger.error(f"Exception type: {type(e).__name__}")
             
-            # Create a more user-friendly exception
-            raise Exception(error_msg) from e
+            # Create a simple, serializable exception
+            raise ValueError(error_msg) from None  # Don't chain to avoid non-serializable data
 
     async def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get a job by ID"""

@@ -1668,9 +1668,22 @@ async def extract_urls(request: ExtractUrlsRequest, background_tasks: Background
             message="URL extraction started. Poll /jobs/{job_id}/urls for results."
         )
         
+    except ValueError as e:
+        # Handle validation/DNS errors from storage
+        error_msg = str(e)
+        logger.error(f"Error creating URL extraction job: {error_msg}")
+        raise HTTPException(status_code=500, detail=error_msg)
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
-        logger.error(f"Error creating URL extraction job: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to create URL extraction job: {str(e)}")
+        # Handle any other exceptions and ensure message is JSON serializable
+        error_msg = str(e) if e else "Unknown error occurred"
+        logger.error(f"Error creating URL extraction job: {error_msg}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to create URL extraction job: {error_msg}"
+        )
 
 
 @app.get("/jobs/{job_id}/urls", response_model=UrlsListResponse)
