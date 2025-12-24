@@ -190,7 +190,8 @@ function JobForm({ onJobCreated, apiUrl, setLoading }) {
           onClick={() => setMode('osm')}
           title="OpenStreetMap - Fast, free, no web scraping"
         >
-          OSM Only <span style={{fontSize: '0.7em', marginLeft: '4px', color: '#4CAF50'}}>FREE</span>
+          <span>OSM</span>
+          <span style={{fontSize: '0.65em', marginLeft: '4px', color: mode === 'osm' ? '#fff' : '#4CAF50', fontWeight: '600'}}>FREE</span>
         </button>
       </div>
 
@@ -426,7 +427,8 @@ function JobForm({ onJobCreated, apiUrl, setLoading }) {
                 )}
               </svg>
               {mode === 'html' ? 'Extract Data' : 
-               mode === 'crawl' ? 'Start Crawling' : 'Start Scraping'}
+               mode === 'crawl' ? 'Start Crawling' :
+               mode === 'osm' ? 'Search OSM' : 'Start Scraping'}
             </>
           )}
         </button>
