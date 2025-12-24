@@ -14,6 +14,7 @@ Rate Limits:
 import httpx
 import logging
 import asyncio
+import time
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 import re
@@ -25,9 +26,13 @@ OVERPASS_API_BASE = "https://overpass-api.de/api/interpreter"
 # "https://overpass.kumi.systems/api/interpreter"
 # "https://overpass.openstreetmap.ru/api/interpreter"
 
-# Rate limiting: 1 request per second
+# Rate limiting: 1 request per second for Overpass API
 _last_request_time = None
 _request_lock = asyncio.Lock()
+
+# Rate limiting for Nominatim geocoding: 1 request per second
+_last_nominatim_request_time = None
+_nominatim_request_lock = asyncio.Lock()
 
 
 class OverpassAPI:
@@ -157,6 +162,59 @@ out skel qt;"""
         
         return query
     
+    def _get_hardcoded_coordinates(self, location: str) -> Optional[Tuple[float, float, float, float]]:
+        """
+        Get hardcoded bounding box for major cities (fallback if geocoding fails).
+        
+        Args:
+            location: Location string
+        
+        Returns:
+            Bounding box tuple (south, west, north, east) or None
+        """
+        # Hardcoded bounding boxes for major US cities
+        # Format: (south, west, north, east)
+        hardcoded_bboxes = {
+            "new york": (40.4774, -74.2591, 40.9176, -73.7004),
+            "new york, ny": (40.4774, -74.2591, 40.9176, -73.7004),
+            "nyc": (40.4774, -74.2591, 40.9176, -73.7004),
+            "los angeles": (33.7037, -118.6682, 34.3373, -118.1553),
+            "los angeles, ca": (33.7037, -118.6682, 34.3373, -118.1553),
+            "la": (33.7037, -118.6682, 34.3373, -118.1553),
+            "chicago": (41.6445, -87.9401, 42.0231, -87.5237),
+            "chicago, il": (41.6445, -87.9401, 42.0231, -87.5237),
+            "houston": (29.5236, -95.8097, 30.1104, -95.0080),
+            "houston, tx": (29.5236, -95.8097, 30.1104, -95.0080),
+            "phoenix": (33.1980, -112.2070, 33.6750, -111.6170),
+            "phoenix, az": (33.1980, -112.2070, 33.6750, -111.6170),
+            "philadelphia": (39.8670, -75.2803, 40.1378, -74.9558),
+            "philadelphia, pa": (39.8670, -75.2803, 40.1378, -74.9558),
+            "san antonio": (29.2241, -98.6677, 29.6387, -98.3047),
+            "san antonio, tx": (29.2241, -98.6677, 29.6387, -98.3047),
+            "san diego": (32.5343, -117.3051, 33.1142, -116.9080),
+            "san diego, ca": (32.5343, -117.3051, 33.1142, -116.9080),
+            "dallas": (32.6170, -97.0690, 33.0238, -96.4637),
+            "dallas, tx": (32.6170, -97.0690, 33.0238, -96.4637),
+            "austin": (30.0987, -98.0130, 30.5169, -97.5614),
+            "austin, tx": (30.0987, -98.0130, 30.5169, -97.5614),
+            "miami": (25.7091, -80.3197, 25.8556, -80.1289),
+            "miami, fl": (25.7091, -80.3197, 25.8556, -80.1289),
+            "atlanta": (33.6478, -84.5514, 33.8869, -84.2898),
+            "atlanta, ga": (33.6478, -84.5514, 33.8869, -84.2898),
+            "boston": (42.2279, -71.1912, 42.3967, -70.8022),
+            "boston, ma": (42.2279, -71.1912, 42.3967, -70.8022),
+            "seattle": (47.4955, -122.4597, 47.7341, -122.2244),
+            "seattle, wa": (47.4955, -122.4597, 47.7341, -122.2244),
+            "denver": (39.6143, -105.1099, 39.9142, -104.6003),
+            "denver, co": (39.6143, -105.1099, 39.9142, -104.6003),
+            "washington": (38.7916, -77.1198, 38.9959, -76.9094),
+            "washington, dc": (38.7916, -77.1198, 38.9959, -76.9094),
+            "dc": (38.7916, -77.1198, 38.9959, -76.9094),
+        }
+        
+        location_lower = location.lower().strip()
+        return hardcoded_bboxes.get(location_lower)
+    
     def _normalize_location(self, location: str) -> List[str]:
         """
         Normalize location string and generate variations to try.
@@ -246,10 +304,23 @@ out skel qt;"""
             radius = 0.45  # ~50km in degrees
             return (lat - radius, lon - radius, lat + radius, lon + radius)
         
+        # First, try hardcoded coordinates (fastest, no API call)
+        hardcoded_bbox = self._get_hardcoded_coordinates(location)
+        if hardcoded_bbox:
+            logger.info(f"Using hardcoded bounding box for '{location}'")
+            return hardcoded_bbox
+        
         # Get location variations to try
         location_variations = self._normalize_location(location)
         
-        # Try each variation until one works
+        # Try hardcoded coordinates for normalized variations too
+        for loc_variant in location_variations:
+            hardcoded_bbox = self._get_hardcoded_coordinates(loc_variant)
+            if hardcoded_bbox:
+                logger.info(f"Using hardcoded bounding box for '{loc_variant}' (normalized from '{location}')")
+                return hardcoded_bbox
+        
+        # Try geocoding each variation until one works
         last_error = None
         for loc_variant in location_variations:
             try:
@@ -281,52 +352,119 @@ out skel qt;"""
         
         Returns:
             Bounding box tuple (south, west, north, east)
-        """
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                # Use Nominatim to geocode
-                response = await client.get(
-                    "https://nominatim.openstreetmap.org/search",
-                    params={
-                        "q": location,
-                        "format": "json",
-                        "limit": 1,
-                        "addressdetails": 1
-                    },
-                    headers={
-                        "User-Agent": "SteakhouseScraper/1.0"  # Required by Nominatim
-                    }
-                )
-                
-                if response.status_code != 200:
-                    raise ValueError(f"Geocoding failed: HTTP {response.status_code}")
-                
-                results = response.json()
-                if not results:
-                    raise ValueError(f"Location not found: {location}")
-                
-                # Get bounding box from result
-                bbox_str = results[0].get("boundingbox", [])
-                if bbox_str:
-                    # Nominatim returns [south, north, west, east]
-                    south, north, west, east = map(float, bbox_str)
-                    return (south, west, north, east)
-                
-                # Fallback: use lat/lon with default radius
-                lat = float(results[0]["lat"])
-                lon = float(results[0]["lon"])
-                radius = 0.45  # ~50km
-                return (lat - radius, lon - radius, lat + radius, lon + radius)
         
-        except httpx.TimeoutException:
-            logger.error(f"Geocoding timeout for '{location}'")
-            raise ValueError(f"Geocoding timeout for '{location}'. Please try again or use coordinates.")
-        except httpx.RequestError as e:
-            logger.error(f"Geocoding request error for '{location}': {e}")
-            raise ValueError(f"Geocoding request failed for '{location}': {str(e)}")
-        except Exception as e:
-            logger.error(f"Geocoding failed for '{location}': {e}")
-            raise ValueError(f"Location not found: '{location}'. Please check spelling or use coordinates (lat,lon).")
+        Raises:
+            ValueError: If geocoding fails
+        """
+        # Rate limiting: Nominatim requires max 1 request per second
+        global _last_nominatim_request_time, _nominatim_request_lock
+        
+        async with _nominatim_request_lock:
+            if _last_nominatim_request_time is not None:
+                elapsed = time.time() - _last_nominatim_request_time
+                if elapsed < 1.0:
+                    wait_time = 1.0 - elapsed
+                    logger.debug(f"Rate limiting Nominatim request: waiting {wait_time:.2f}s")
+                    await asyncio.sleep(wait_time)
+            _last_nominatim_request_time = time.time()
+        
+        # Retry logic with exponential backoff
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    # Use Nominatim to geocode
+                    response = await client.get(
+                        "https://nominatim.openstreetmap.org/search",
+                        params={
+                            "q": location,
+                            "format": "json",
+                            "limit": 1,
+                            "addressdetails": 1,
+                            "extratags": 1
+                        },
+                        headers={
+                            "User-Agent": "SteakhouseScraper/1.0 (Contact: support@example.com)"  # Required by Nominatim
+                        },
+                        follow_redirects=True
+                    )
+                    
+                    # Log response for debugging
+                    logger.debug(f"Nominatim response for '{location}': HTTP {response.status_code}")
+                    
+                    if response.status_code == 429:
+                        # Rate limited - wait longer before retry
+                        wait_time = (2 ** attempt) * 2  # Exponential backoff: 2s, 4s, 8s
+                        logger.warning(f"Nominatim rate limited for '{location}', waiting {wait_time}s before retry {attempt + 1}/{max_retries}")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(wait_time)
+                            continue
+                        else:
+                            raise ValueError(f"Geocoding rate limited: Too many requests to Nominatim. Please wait a moment and try again, or use coordinates (lat,lon).")
+                    
+                    if response.status_code != 200:
+                        error_text = response.text[:200] if hasattr(response, 'text') else "Unknown error"
+                        logger.error(f"Geocoding failed for '{location}': HTTP {response.status_code} - {error_text}")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(1 * (attempt + 1))
+                            continue
+                        raise ValueError(f"Geocoding failed: HTTP {response.status_code}. Please try again or use coordinates (lat,lon).")
+                    
+                    results = response.json()
+                    if not results or len(results) == 0:
+                        raise ValueError(f"Location not found: '{location}'. Please check spelling or use coordinates (lat,lon).")
+                    
+                    # Get bounding box from result
+                    bbox_str = results[0].get("boundingbox", [])
+                    if bbox_str and len(bbox_str) == 4:
+                        # Nominatim returns [south, north, west, east]
+                        south, north, west, east = map(float, bbox_str)
+                        logger.info(f"Successfully geocoded '{location}' to bbox: ({south}, {west}, {north}, {east})")
+                        return (south, west, north, east)
+                    
+                    # Fallback: use lat/lon with default radius
+                    if "lat" in results[0] and "lon" in results[0]:
+                        lat = float(results[0]["lat"])
+                        lon = float(results[0]["lon"])
+                        radius = 0.45  # ~50km
+                        logger.info(f"Geocoded '{location}' to point ({lat}, {lon}), using {radius}° radius")
+                        return (lat - radius, lon - radius, lat + radius, lon + radius)
+                    
+                    raise ValueError(f"Invalid geocoding response for '{location}': missing bounding box or coordinates")
+            
+            except httpx.TimeoutException:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 2
+                    logger.warning(f"Geocoding timeout for '{location}', retrying in {wait_time}s ({attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                logger.error(f"Geocoding timeout for '{location}' after {max_retries} attempts")
+                raise ValueError(f"Geocoding timeout for '{location}'. Please try again or use coordinates (lat,lon).")
+            
+            except httpx.RequestError as e:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 2
+                    logger.warning(f"Geocoding request error for '{location}': {e}, retrying in {wait_time}s ({attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                logger.error(f"Geocoding request error for '{location}': {e}")
+                raise ValueError(f"Geocoding request failed for '{location}': {str(e)}. Please check your internet connection or use coordinates (lat,lon).")
+            
+            except ValueError:
+                # Re-raise ValueError immediately (no retry for validation errors)
+                raise
+            
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 2
+                    logger.warning(f"Geocoding error for '{location}': {e}, retrying in {wait_time}s ({attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                logger.error(f"Geocoding failed for '{location}': {e}", exc_info=True)
+                raise ValueError(f"Location not found: '{location}'. Please check spelling or use coordinates (lat,lon).")
+        
+        # Should not reach here, but just in case
+        raise ValueError(f"Geocoding failed for '{location}' after {max_retries} attempts. Please use coordinates (lat,lon) or bounding box.")
     
     def _format_steakhouse(self, element: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
