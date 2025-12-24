@@ -67,34 +67,36 @@ Return as a JSON array where each restaurant is a complete object with ALL avail
 class AIFilter:
     """
     AI-powered data filter and extractor.
-    Supports multiple AI providers:
-    - Google Gemini (FREE tier available)
-    - OpenAI GPT (paid)
+    Uses FREE APIs only:
+    - Google Gemini (FREE tier - recommended, no credit card required)
     - Fallback to smart extraction (no API needed)
+    
+    Note: OpenAI is no longer used as it requires a paid subscription.
+    Get your free Gemini API key at: https://makersuite.google.com/app/apikey
     """
     
     def __init__(self, api_key: str = None):
         self.gemini_api_key = api_key or os.getenv("GEMINI_API_KEY")
-        self.openai_api_key = os.getenv("OPENAI_API_KEY")
         self.model = None
         self._init_ai_provider()
     
     def _init_ai_provider(self):
-        """Initialize the best available AI provider"""
-        # Try Google Gemini first (FREE tier)
+        """Initialize the best available FREE AI provider"""
+        # Try Google Gemini (FREE tier - no credit card required)
         if self.gemini_api_key:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=self.gemini_api_key)
                 
-                # Try multiple model names in order of preference
-                # gemini-2.5-flash-lite is the latest fast model
+                # Try multiple FREE Gemini models in order of preference
+                # All these models are available in the free tier
                 model_names = [
-                    'gemini-2.5-flash-lite',  # Latest fast model (user preference)
-                    'gemini-2.5-flash',       # Alternative flash version
-                    'gemini-pro',             # Fallback: most stable, widely available
-                    'gemini-1.5-pro',         # Fallback: newer version
-                    'models/gemini-2.5-flash-lite',  # With models/ prefix
+                    'gemini-1.5-flash',        # Latest fast model (FREE tier)
+                    'gemini-1.5-flash-latest',  # Latest version of flash
+                    'gemini-1.5-pro-latest',   # Pro model (FREE tier with rate limits)
+                    'gemini-pro',              # Stable fallback (FREE tier)
+                    'gemini-1.5-pro',          # Alternative pro version
+                    'models/gemini-1.5-flash', # With models/ prefix
                 ]
                 
                 for model_name in model_names:
@@ -102,36 +104,26 @@ class AIFilter:
                         self.model = genai.GenerativeModel(model_name)
                         # Test if model works by checking if it's accessible
                         self.provider = "gemini"
-                        logger.info(f"AI Filter initialized with Google Gemini ({model_name})")
+                        logger.info(f"AI Filter initialized with Google Gemini FREE tier ({model_name})")
                         return
                     except Exception as model_error:
                         logger.debug(f"Failed to initialize model {model_name}: {model_error}")
                         continue
                 
-                # If all models failed, raise the last error
-                raise Exception(f"None of the Gemini models worked. Tried: {', '.join(model_names)}")
+                # If all models failed, log warning but continue with smart extraction
+                logger.warning(f"None of the Gemini models worked. Tried: {', '.join(model_names)}. Falling back to smart extraction.")
                 
             except ImportError:
-                logger.warning("google-generativeai not installed, trying OpenAI")
+                logger.warning("google-generativeai not installed. Install with: pip install google-generativeai")
             except Exception as e:
-                logger.warning(f"Failed to init Gemini: {e}")
+                logger.warning(f"Failed to init Gemini: {e}. Falling back to smart extraction.")
         
-        # Try OpenAI as fallback
-        if self.openai_api_key:
-            try:
-                from openai import OpenAI
-                self.openai_client = OpenAI(api_key=self.openai_api_key)
-                self.provider = "openai"
-                logger.info("AI Filter initialized with OpenAI")
-                return
-            except ImportError:
-                logger.warning("openai not installed")
-            except Exception as e:
-                logger.warning(f"Failed to init OpenAI: {e}")
-        
-        # Fallback to smart extraction (no API needed)
+        # Fallback to smart extraction (no API needed - completely free)
         self.provider = "smart_extraction"
-        logger.info("AI Filter using smart extraction (no API)")
+        if not self.gemini_api_key:
+            logger.info("AI Filter using smart extraction (no API key set). Get free Gemini API key at: https://makersuite.google.com/app/apikey")
+        else:
+            logger.info("AI Filter using smart extraction (no API)")
 
     async def filter_and_structure(
         self,
@@ -154,14 +146,18 @@ class AIFilter:
         try:
             if self.provider == "gemini":
                 return await self._filter_with_gemini(data, prompt)
-            elif self.provider == "openai":
-                return await self._filter_with_openai(data, prompt)
             else:
+                # Use smart extraction (free, no API needed)
                 return await self._smart_extraction(data, prompt)
         except Exception as e:
             logger.error(f"AI filtering failed: {e}")
-            # Return original data on failure
-            return [data]
+            # Fallback to smart extraction on failure
+            try:
+                return await self._smart_extraction(data, prompt)
+            except Exception as fallback_error:
+                logger.error(f"Smart extraction also failed: {fallback_error}")
+                # Return original data as last resort
+                return [data]
 
     async def _filter_with_gemini(self, data: Dict[str, Any], prompt: str) -> List[Dict[str, Any]]:
         """Use Google Gemini to extract data"""
@@ -224,29 +220,38 @@ JSON OUTPUT:"""
                 response = self.model.generate_content(ai_prompt)
                 result_text = response.text.strip()
             except Exception as model_error:
-                # If model error, try to reinitialize with a different model
-                if "404" in str(model_error) or "not found" in str(model_error).lower():
-                    logger.warning(f"Model not found, trying to reinitialize with fallback models: {model_error}")
+                # If model error, try to reinitialize with a different FREE model
+                if "404" in str(model_error) or "not found" in str(model_error).lower() or "quota" in str(model_error).lower():
+                    logger.warning(f"Model error, trying fallback FREE models: {model_error}")
                     import google.generativeai as genai
                     
-                    # Try fallback models in order
-                    fallback_models = ['gemini-2.5-flash-lite', 'gemini-pro', 'gemini-1.5-pro']
+                    # Try fallback FREE models in order
+                    fallback_models = ['gemini-1.5-flash', 'gemini-pro', 'gemini-1.5-pro']
                     last_error = None
                     for fallback_model in fallback_models:
                         try:
                             self.model = genai.GenerativeModel(fallback_model)
                             response = self.model.generate_content(ai_prompt)
                             result_text = response.text.strip()
-                            logger.info(f"Successfully used fallback model {fallback_model}")
+                            logger.info(f"Successfully used fallback FREE model {fallback_model}")
                             break
                         except Exception as fallback_error:
                             last_error = fallback_error
                             logger.debug(f"Fallback model {fallback_model} failed: {fallback_error}")
                             continue
                     else:
-                        # All fallbacks failed
-                        logger.error(f"All fallback models failed. Last error: {last_error}")
+                        # All fallbacks failed - might be rate limit or quota issue
+                        error_msg = str(last_error) if last_error else str(model_error)
+                        if "quota" in error_msg.lower() or "rate" in error_msg.lower():
+                            logger.warning(f"Gemini API quota/rate limit reached. Falling back to smart extraction.")
+                            # Fallback to smart extraction instead of raising error
+                            return await self._smart_extraction(data, prompt)
+                        logger.error(f"All fallback models failed. Last error: {error_msg}")
                         raise model_error  # Raise original error
+                elif "quota" in str(model_error).lower() or "rate" in str(model_error).lower():
+                    # Rate limit or quota exceeded - use smart extraction
+                    logger.warning(f"Gemini API quota/rate limit reached. Using smart extraction fallback.")
+                    return await self._smart_extraction(data, prompt)
                 else:
                     raise
             
@@ -268,49 +273,6 @@ JSON OUTPUT:"""
             logger.error(f"Gemini extraction failed: {e}")
             raise
 
-    async def _filter_with_openai(self, data: Dict[str, Any], prompt: str) -> List[Dict[str, Any]]:
-        """Use OpenAI GPT to extract data"""
-        try:
-            content_text = self._prepare_content(data)
-            
-            response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a data extraction assistant. Extract information from web content and return it as JSON."
-                    },
-                    {
-                        "role": "user",
-                        "content": f"""Extract the following from this web page:
-
-REQUEST: {prompt}
-
-CONTENT:
-{content_text}
-
-Return ONLY a JSON array of extracted items. No explanations."""
-                    }
-                ],
-                temperature=0.1,
-                max_tokens=2000
-            )
-            
-            result_text = response.choices[0].message.content.strip()
-            result_text = self._clean_json_response(result_text)
-            
-            try:
-                extracted = json.loads(result_text)
-                if isinstance(extracted, list):
-                    return extracted if extracted else [data]
-                else:
-                    return [extracted]
-            except json.JSONDecodeError:
-                return [{"ai_extracted": result_text, "original_url": data.get("url")}]
-                
-        except Exception as e:
-            logger.error(f"OpenAI extraction failed: {e}")
-            raise
 
     async def _smart_extraction(self, data: Dict[str, Any], prompt: str) -> List[Dict[str, Any]]:
         """

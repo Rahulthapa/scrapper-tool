@@ -1,18 +1,25 @@
 """
 Yelp Fusion API Integration
-Free tier: 5000 API calls per day
+FREE TIER: 5000 API calls per day (no credit card required)
 
-Get your API key at: https://www.yelp.com/developers/v3/manage_app
+Get your FREE API key at: https://www.yelp.com/developers/v3/manage_app
+
+Rate Limits:
+- Free tier: 5,000 calls per day
+- Rate limit headers are checked automatically
+- Errors are raised when limits are exceeded
 """
 
 import os
 import httpx
 import logging
 from typing import Dict, Any, List, Optional
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
 YELP_API_BASE = "https://api.yelp.com/v3"
+FREE_TIER_DAILY_LIMIT = 5000  # Free tier limit per day
 
 
 class YelpAPI:
@@ -21,8 +28,11 @@ class YelpAPI:
         if not self.api_key:
             raise ValueError(
                 "Yelp API key not found. Set YELP_API_KEY environment variable. "
-                "Get your free API key at: https://www.yelp.com/developers/v3/manage_app"
+                "Get your FREE API key at: https://www.yelp.com/developers/v3/manage_app"
             )
+        # Simple rate limit tracking (resets daily)
+        self.daily_call_count = 0
+        self.last_reset_date = datetime.now().date()
     
     async def search_businesses(
         self,
@@ -131,6 +141,25 @@ class YelpAPI:
             "distance_meters": biz.get("distance"),
         }
     
+    def _check_rate_limit(self):
+        """Check and reset daily call count if needed"""
+        today = datetime.now().date()
+        if today > self.last_reset_date:
+            # New day, reset counter
+            self.daily_call_count = 0
+            self.last_reset_date = today
+            logger.info("Yelp API daily call counter reset")
+        
+        # Check if we're approaching the limit
+        remaining = FREE_TIER_DAILY_LIMIT - self.daily_call_count
+        if remaining <= 0:
+            raise ValueError(
+                f"Yelp API FREE tier daily limit reached ({FREE_TIER_DAILY_LIMIT} calls/day). "
+                f"Limit resets at midnight. Consider upgrading or wait until tomorrow."
+            )
+        elif remaining < 100:
+            logger.warning(f"Yelp API: Only {remaining} calls remaining today (FREE tier limit: {FREE_TIER_DAILY_LIMIT})")
+    
     async def _request(
         self,
         method: str,
@@ -138,7 +167,10 @@ class YelpAPI:
         params: Dict = None,
         data: Dict = None,
     ) -> Dict[str, Any]:
-        """Make a request to the Yelp API."""
+        """Make a request to the Yelp API with rate limit tracking."""
+        # Check rate limit before making request
+        self._check_rate_limit()
+        
         url = f"{YELP_API_BASE}{endpoint}"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -154,11 +186,38 @@ class YelpAPI:
                 json=data,
             )
             
+            # Increment call count on successful request
+            if response.status_code < 400:
+                self.daily_call_count += 1
+                remaining = FREE_TIER_DAILY_LIMIT - self.daily_call_count
+                if remaining % 100 == 0 or remaining < 50:
+                    logger.info(f"Yelp API: {remaining} calls remaining today (FREE tier)")
+            
             if response.status_code == 401:
-                raise ValueError("Invalid Yelp API key")
+                raise ValueError(
+                    "Invalid Yelp API key. "
+                    "Get your FREE API key at: https://www.yelp.com/developers/v3/manage_app"
+                )
             elif response.status_code == 429:
-                raise ValueError("Yelp API rate limit exceeded (5000 calls/day)")
+                # Check rate limit headers if available
+                retry_after = response.headers.get("Retry-After", "unknown")
+                raise ValueError(
+                    f"Yelp API rate limit exceeded (FREE tier: {FREE_TIER_DAILY_LIMIT} calls/day). "
+                    f"Retry after: {retry_after}. "
+                    f"Used: {self.daily_call_count}/{FREE_TIER_DAILY_LIMIT} calls today."
+                )
             
             response.raise_for_status()
             return response.json()
+    
+    def get_usage_stats(self) -> Dict[str, Any]:
+        """Get current API usage statistics"""
+        remaining = FREE_TIER_DAILY_LIMIT - self.daily_call_count
+        return {
+            "daily_limit": FREE_TIER_DAILY_LIMIT,
+            "calls_used": self.daily_call_count,
+            "calls_remaining": remaining,
+            "reset_date": self.last_reset_date.isoformat(),
+            "tier": "FREE"
+        }
 

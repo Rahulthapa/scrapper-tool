@@ -10,6 +10,9 @@ playwright==1.41.0
 supabase==2.8.0
 python-dotenv==1.0.0
 python-dateutil==2.8.2
-# AI Providers (optional - enable the one you want to use)
+# AI Provider (FREE tier - recommended)
+# Google Gemini - FREE tier, no credit card required
+# Get your free API key at: https://makersuite.google.com/app/apikey
 google-generativeai==0.8.3
-openai==1.55.0
+# OpenAI removed - requires paid subscription
+# Use Google Gemini (free) instead

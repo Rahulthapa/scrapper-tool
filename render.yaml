@@ -22,10 +22,12 @@ services:
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false
-      # Optional: AI for better data extraction
-      # Google Gemini - FREE tier (recommended for AI extraction)
+      # Optional: FREE APIs for better data extraction
+      # Google Gemini - FREE tier (recommended, no credit card required)
+      # Get free key at: https://makersuite.google.com/app/apikey
       - key: GEMINI_API_KEY
         sync: false
-      # OpenAI - Paid alternative (optional)
-      - key: OPENAI_API_KEY
+      # Yelp API - FREE tier (5000 calls/day, no credit card required)
+      # Get free key at: https://www.yelp.com/developers/v3/manage_app
+      - key: YELP_API_KEY
         sync: false

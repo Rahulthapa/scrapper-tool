@@ -417,8 +417,9 @@ async def debug_info():
         "environment": {
             "SUPABASE_URL": "SET" if os.getenv("SUPABASE_URL") else "NOT SET",
             "SUPABASE_ANON_KEY": "SET" if os.getenv("SUPABASE_ANON_KEY") else "NOT SET",
-            "GEMINI_API_KEY": "SET" if os.getenv("GEMINI_API_KEY") else "NOT SET",
-            "OPENAI_API_KEY": "SET" if os.getenv("OPENAI_API_KEY") else "NOT SET",
+            "GEMINI_API_KEY": "SET (FREE tier)" if os.getenv("GEMINI_API_KEY") else "NOT SET - Get free key at https://makersuite.google.com/app/apikey",
+            "YELP_API_KEY": "SET (FREE tier)" if os.getenv("YELP_API_KEY") else "NOT SET - Get free key at https://www.yelp.com/developers/v3/manage_app",
+            "OSM_OVERPASS_API": "ALWAYS AVAILABLE (FREE, no API key required)",
         },
         "database": {"status": "unknown"},
         "ai_provider": "unknown"
@@ -1045,13 +1046,134 @@ async def yelp_business_details(business_id: str):
 
 @app.get("/api/yelp/status")
 async def yelp_api_status():
-    """Check if Yelp API is configured."""
-    import os
+    """Check if Yelp API is configured and get usage stats."""
     has_key = bool(os.getenv("YELP_API_KEY"))
-    return JSONResponse(status_code=200, content={
-        "configured": has_key,
-        "message": "Yelp API is ready" if has_key else "YELP_API_KEY not set. Get your free key at https://www.yelp.com/developers/v3/manage_app"
-    })
+    if not has_key:
+        return JSONResponse(status_code=200, content={
+            "configured": False,
+            "message": "YELP_API_KEY not set. Get your FREE key at https://www.yelp.com/developers/v3/manage_app",
+            "tier": "FREE",
+            "daily_limit": 5000
+        })
+    
+    try:
+        from .yelp_api import YelpAPI
+        yelp = YelpAPI()
+        stats = yelp.get_usage_stats()
+        return JSONResponse(status_code=200, content={
+            "configured": True,
+            "message": "Yelp API is ready (FREE tier)",
+            **stats
+        })
+    except Exception as e:
+        return JSONResponse(status_code=200, content={
+            "configured": False,
+            "message": f"Yelp API error: {str(e)}",
+            "tier": "FREE",
+            "daily_limit": 5000
+        })
+
+
+# ============ OPENSTREETMAP OVERPASS API ENDPOINTS ============
+
+@app.get("/api/osm/search")
+async def osm_search_steakhouses(
+    location: str = Query(..., description="Location (e.g., 'Houston, TX' or '29.5,-96.0,30.0,-94.5' for bbox)"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of results"),
+    enhance: bool = Query(False, description="Enhance data with web scraping and AI extraction"),
+):
+    """
+    Search OpenStreetMap for steakhouses in a location.
+    
+    Completely FREE - no API key required!
+    
+    Location can be:
+    - City name: "Houston, TX"
+    - Coordinates: "29.7604,-95.3698" (creates ~50km radius)
+    - Bounding box: "29.5,-96.0,30.0,-94.5" (south,west,north,east)
+    
+    When enhance=true:
+    - Scrapes restaurant websites for menus and images
+    - Uses AI to extract steak cut types from descriptions
+    """
+    try:
+        from .osm_api import OverpassAPI
+        
+        osm = OverpassAPI()
+        steakhouses = await osm.search_steakhouses(
+            location=location,
+            limit=limit,
+            enhance=enhance
+        )
+        
+        return JSONResponse(status_code=200, content={
+            "success": True,
+            "source": "osm_overpass",
+            "location": location,
+            "total": len(steakhouses),
+            "steakhouses": steakhouses,
+        })
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"OSM Overpass API error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"OSM Overpass API error: {str(e)}")
+
+
+@app.get("/api/osm/steakhouse/{osm_id}")
+async def osm_steakhouse_details(
+    osm_id: str,
+    enhance: bool = Query(False, description="Enhance data with web scraping and AI extraction"),
+):
+    """
+    Get detailed information about a specific steakhouse from OpenStreetMap.
+    
+    OSM ID format: "node/123456", "way/789012", or "relation/345678"
+    
+    Completely FREE - no API key required!
+    """
+    try:
+        from .osm_api import OverpassAPI
+        
+        osm = OverpassAPI()
+        steakhouse = await osm.get_steakhouse_details(
+            osm_id=osm_id,
+            enhance=enhance
+        )
+        
+        if not steakhouse:
+            raise HTTPException(status_code=404, detail=f"Steakhouse {osm_id} not found")
+        
+        return JSONResponse(status_code=200, content={
+            "success": True,
+            "source": "osm_overpass",
+            "steakhouse": steakhouse,
+        })
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"OSM Overpass API error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"OSM Overpass API error: {str(e)}")
+
+
+@app.get("/api/osm/status")
+async def osm_api_status():
+    """Check OSM Overpass API status. Always available - completely free!"""
+    try:
+        from .osm_api import OverpassAPI
+        
+        osm = OverpassAPI()
+        status = osm.get_status()
+        
+        return JSONResponse(status_code=200, content=status)
+    except Exception as e:
+        return JSONResponse(status_code=200, content={
+            "configured": True,
+            "message": f"OSM Overpass API is ready (completely free, no API key required). Error: {str(e)}",
+            "tier": "FREE"
+        })
 
 
 @app.get("/test/job/{job_id}")
