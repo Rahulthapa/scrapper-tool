@@ -24,6 +24,10 @@ class ScrapeJobCreate(BaseModel):
     use_javascript: Optional[bool] = False  # Use Playwright for JS-rendered pages
     extract_individual_pages: Optional[bool] = True  # Extract from individual restaurant pages (for listing pages) - DEFAULT: enabled
     max_restaurants: Optional[int] = None  # Limit number of restaurants to scrape (for testing). None = all
+    # OSM-only mode fields
+    osm_only: Optional[bool] = False  # Use only OpenStreetMap (no web scraping)
+    osm_location: Optional[str] = None  # Location for OSM search (required if osm_only=True)
+    osm_limit: Optional[int] = 50  # Max results from OSM
 
 
 class ParseHTMLRequest(BaseModel):
@@ -65,6 +69,10 @@ class ScrapeJob(BaseModel):
     created_at: datetime
     completed_at: Optional[datetime] = None
     error: Optional[str] = None
+    # OSM-only mode fields
+    osm_only: Optional[bool] = False
+    osm_location: Optional[str] = None
+    osm_limit: Optional[int] = None
 
 
 class ScrapeResult(BaseModel):

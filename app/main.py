@@ -1176,6 +1176,73 @@ async def osm_api_status():
         })
 
 
+@app.post("/jobs/osm-only", response_model=ScrapeJob, status_code=201)
+async def create_osm_only_job(
+    location: str = Query(..., description="Location (e.g., 'Houston, TX' or '29.7604,-95.3698')"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of results"),
+    export_format: str = Query("json", description="Export format: json, csv, excel"),
+    background_tasks: BackgroundTasks = None
+):
+    """
+    Create a scraping job that uses ONLY OpenStreetMap Overpass API.
+    No web scraping is performed - pure OSM data only.
+    
+    This is faster and uses only free OSM data.
+    """
+    try:
+        storage_instance = get_storage()
+        worker_instance = get_worker()
+        
+        job_id = str(uuid.uuid4())
+        
+        job_data = {
+            'id': job_id,
+            'status': JobStatus.PENDING.value,
+            'osm_only': True,
+            'osm_location': location,
+            'osm_limit': limit,
+            'export_format': export_format,
+            'created_at': datetime.utcnow().isoformat(),
+        }
+        
+        # Save job to database
+        job = await storage_instance.create_job(job_data)
+        
+        if not job:
+            raise HTTPException(status_code=500, detail="Failed to create job")
+        
+        # Process job in background
+        async def process_job_wrapper():
+            """Wrapper to ensure background task errors are logged"""
+            try:
+                await worker_instance.process_job(job_id)
+            except Exception as e:
+                logger.error(f"Background task failed for job {job_id}: {str(e)}", exc_info=True)
+                try:
+                    storage = get_storage()
+                    await storage.update_job(job_id, {
+                        'status': JobStatus.FAILED.value,
+                        'error': str(e)
+                    })
+                except Exception as update_error:
+                    logger.error(f"Failed to update job status: {update_error}")
+        
+        if background_tasks:
+            background_tasks.add_task(process_job_wrapper)
+        else:
+            # If no background tasks, process immediately (for testing)
+            import asyncio
+            asyncio.create_task(process_job_wrapper())
+        
+        logger.info(f"OSM-only job {job_id} created for location: {location}")
+        
+        return job
+        
+    except Exception as e:
+        logger.error(f"Failed to create OSM-only job: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to create job: {str(e)}")
+
+
 @app.get("/test/job/{job_id}")
 async def test_get_job(job_id: str):
     """Test endpoint to diagnose job fetching issues - returns raw data"""
@@ -1274,11 +1341,28 @@ async def create_job(job_request: ScrapeJobCreate, background_tasks: BackgroundT
         if hasattr(job_request, 'max_restaurants') and job_request.max_restaurants:
             job_data['max_restaurants'] = job_request.max_restaurants
         
-        # Validate: need either URL or search_query
-        if not job_data.get('url') and not job_data.get('search_query'):
+        # Add OSM-only fields
+        if job_request.osm_only:
+            if not job_request.osm_location:
+                raise HTTPException(
+                    status_code=400,
+                    detail="osm_location is required when osm_only=True"
+                )
+            job_data.update({
+                'osm_only': True,
+                'osm_location': job_request.osm_location,
+                'osm_limit': job_request.osm_limit or 50,
+            })
+            # OSM-only doesn't need URL, so clear it if provided
+            if job_data.get('url'):
+                logger.warning(f"URL provided but osm_only=True, ignoring URL")
+                job_data['url'] = None
+        
+        # Validate: need either URL, search_query, or osm_location
+        if not job_data.get('url') and not job_data.get('search_query') and not job_data.get('osm_location'):
             raise HTTPException(
                 status_code=400,
-                detail="Either 'url' or 'search_query' must be provided"
+                detail="Either 'url', 'search_query', or 'osm_location' (with osm_only=True) must be provided"
             )
         
         job = await storage_instance.create_job(job_data)

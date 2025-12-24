@@ -61,14 +61,18 @@ class ScraperWorker:
             filtered_data = []
             use_javascript = job.get('use_javascript', False)
 
-            # Check if this is a crawl job or single URL job
+            # Check if this is an OSM-only, crawl, or single URL job
             if detail_logger:
-                if job.get('crawl_mode'):
+                if job.get('osm_only'):
+                    detail_logger.log_restaurant_processing(job.get('osm_location') or "N/A", "JOB_TYPE", "OSM-ONLY MODE")
+                elif job.get('crawl_mode'):
                     detail_logger.log_restaurant_processing(job_url or "N/A", "JOB_TYPE", "CRAWL MODE")
                 else:
                     detail_logger.log_restaurant_processing(job_url or "N/A", "JOB_TYPE", "SINGLE URL MODE")
             
-            if job.get('crawl_mode'):
+            if job.get('osm_only'):
+                filtered_data = await self._process_osm_only_job(job, errors)
+            elif job.get('crawl_mode'):
                 filtered_data = await self._process_crawl_job(job, errors)
             else:
                 filtered_data = await self._process_single_url_job(job, errors)
@@ -94,7 +98,8 @@ class ScraperWorker:
                 return
 
             # Extract from individual pages if requested and we have restaurant data
-            if job.get('extract_individual_pages'):
+            # Skip for OSM-only jobs (no web scraping)
+            if job.get('extract_individual_pages') and not job.get('osm_only'):
                 filtered_data = await self._extract_from_individual_pages_if_needed(filtered_data, job, errors)
 
             # Apply AI filtering if prompt provided
@@ -391,6 +396,84 @@ class ScraperWorker:
         
         return False
     
+    async def _process_osm_only_job(
+        self,
+        job: Dict,
+        errors: List[str]
+    ) -> List[Dict]:
+        """
+        Process OSM-only scraping job - uses only OpenStreetMap Overpass API.
+        No web scraping is performed.
+        """
+        from .osm_api import OverpassAPI
+        from datetime import datetime
+        
+        location = job.get('osm_location')
+        if not location:
+            raise ValueError("osm_location is required when osm_only=True")
+        
+        limit = job.get('osm_limit', 50)
+        
+        logger.info(f"Processing OSM-only job for location: {location}, limit: {limit}")
+        
+        # Log to detailed logger
+        try:
+            from app.scraper_logger import get_scraper_logger
+            detail_logger = get_scraper_logger()
+            detail_logger.log_separator(f"PROCESSING OSM-ONLY JOB: {location}")
+            detail_logger.log_restaurant_processing(location, "OSM_START", 
+                f"Location: {location}, Limit: {limit}")
+        except:
+            detail_logger = None
+        
+        try:
+            osm = OverpassAPI()
+            steakhouses = await osm.search_steakhouses(
+                location=location,
+                limit=limit,
+                enhance=False  # No web scraping - pure OSM data only
+            )
+            
+            # Format data to match existing structure
+            formatted_data = []
+            for steakhouse in steakhouses:
+                # Add source identifier and metadata
+                steakhouse['source'] = 'osm_overpass'
+                steakhouse['scraped_at'] = datetime.utcnow().isoformat()
+                # Ensure URL field exists (use website if available, or OSM URL)
+                if not steakhouse.get('url') and steakhouse.get('website'):
+                    steakhouse['url'] = steakhouse['website']
+                elif not steakhouse.get('url'):
+                    # Create OSM URL from OSM ID
+                    osm_id = steakhouse.get('osm_id', '')
+                    if osm_id:
+                        steakhouse['url'] = f"https://www.openstreetmap.org/{osm_id}"
+                
+                formatted_data.append(steakhouse)
+            
+            logger.info(f"OSM-only job completed: Found {len(formatted_data)} steakhouses")
+            if detail_logger:
+                detail_logger.log_restaurant_processing(location, "OSM_COMPLETE", 
+                    f"Found {len(formatted_data)} steakhouses")
+            
+            return formatted_data
+            
+        except ValueError as e:
+            # Location not found or other validation errors
+            error_msg = f"OSM-only scraping failed: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            errors.append(error_msg)
+            if detail_logger:
+                detail_logger.log_error(error_msg, location, e)
+            raise
+        except Exception as e:
+            error_msg = f"OSM-only scraping failed: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            errors.append(error_msg)
+            if detail_logger:
+                detail_logger.log_error(error_msg, location, e)
+            raise
+
     async def extract_urls_only(
         self,
         listing_url: str,

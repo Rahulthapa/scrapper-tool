@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import './JobForm.css'
 
 function JobForm({ onJobCreated, apiUrl, setLoading }) {
-  const [mode, setMode] = useState('html') // 'html', 'url', 'crawl' - HTML first (most reliable free option)
+  const [mode, setMode] = useState('html') // 'html', 'url', 'crawl', 'osm' - HTML first (most reliable free option)
   const [url, setUrl] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [rawHtml, setRawHtml] = useState('')
@@ -13,6 +13,8 @@ function JobForm({ onJobCreated, apiUrl, setLoading }) {
   const [maxPages, setMaxPages] = useState(10)
   const [maxDepth, setMaxDepth] = useState(2)
   const [sameDomain, setSameDomain] = useState(true)
+  const [osmLocation, setOsmLocation] = useState('')
+  const [osmLimit, setOsmLimit] = useState(50)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
@@ -65,6 +67,41 @@ function JobForm({ onJobCreated, apiUrl, setLoading }) {
         return
       }
 
+      // OSM-only mode
+      if (mode === 'osm') {
+        const response = await fetch(`${apiUrl}/jobs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            osm_only: true,
+            osm_location: osmLocation,
+            osm_limit: osmLimit,
+            export_format: exportFormat,
+            ai_prompt: aiPrompt || null,
+          }),
+        })
+
+        if (!response.ok) {
+          let errorMessage = `Request failed (${response.status})`
+          try {
+            const contentType = response.headers.get('content-type')
+            if (contentType && contentType.includes('application/json')) {
+              const errorData = await response.json()
+              errorMessage = errorData.detail || errorMessage
+            }
+          } catch {}
+          throw new Error(errorMessage)
+        }
+
+        const job = await response.json()
+        onJobCreated(job)
+
+        setOsmLocation('')
+        setOsmLimit(50)
+        setAiPrompt('')
+        return
+      }
+
       // Regular URL or Crawl mode
       const response = await fetch(`${apiUrl}/jobs`, {
         method: 'POST',
@@ -114,6 +151,7 @@ function JobForm({ onJobCreated, apiUrl, setLoading }) {
     if (mode === 'html') return rawHtml.length > 100
     if (mode === 'url') return !!url
     if (mode === 'crawl') return !!searchQuery
+    if (mode === 'osm') return !!osmLocation
     return false
   }
 
@@ -146,6 +184,14 @@ function JobForm({ onJobCreated, apiUrl, setLoading }) {
         >
           Crawl
         </button>
+        <button 
+          type="button"
+          className={`mode-tab ${mode === 'osm' ? 'active' : ''}`}
+          onClick={() => setMode('osm')}
+          title="OpenStreetMap - Fast, free, no web scraping"
+        >
+          OSM Only <span style={{fontSize: '0.7em', marginLeft: '4px', color: '#4CAF50'}}>FREE</span>
+        </button>
       </div>
 
       <form onSubmit={handleSubmit}>
@@ -161,6 +207,36 @@ function JobForm({ onJobCreated, apiUrl, setLoading }) {
               disabled={submitting}
             />
           </div>
+        )}
+
+        {mode === 'osm' && (
+          <>
+            <div className="form-group">
+              <label>Location <span style={{color: '#4CAF50'}}>(FREE - No API key needed)</span></label>
+              <input
+                type="text"
+                value={osmLocation}
+                onChange={(e) => setOsmLocation(e.target.value)}
+                placeholder="Houston, TX or 29.7604,-95.3698"
+                required
+                disabled={submitting}
+              />
+              <small>City name, coordinates, or bounding box. Uses OpenStreetMap data only.</small>
+            </div>
+
+            <div className="form-group">
+              <label>Max Results</label>
+              <input
+                type="number"
+                value={osmLimit}
+                onChange={(e) => setOsmLimit(parseInt(e.target.value) || 50)}
+                min="1"
+                max="200"
+                disabled={submitting}
+              />
+              <small>Maximum number of steakhouses to retrieve (1-200)</small>
+            </div>
+          </>
         )}
 
         {mode === 'crawl' && (
@@ -254,26 +330,28 @@ function JobForm({ onJobCreated, apiUrl, setLoading }) {
           </div>
         )}
 
-        <div className="form-group">
-          <label>AI Extraction Prompt {mode === 'html' ? '(recommended)' : '(optional)'}</label>
-          <textarea
-            value={aiPrompt}
-            onChange={(e) => setAiPrompt(e.target.value)}
-            placeholder={mode === 'html' 
-              ? "Extract all restaurant names, addresses, phone numbers, ratings, and prices as a list"
-              : "Extract restaurant names, addresses, ratings..."
-            }
-            disabled={submitting}
-          />
-          <small>
-            {mode === 'html' 
-              ? 'Describe what data you want - AI will find and structure it for you'
-              : 'Describe what data you want to extract'
-            }
-          </small>
-        </div>
+        {mode !== 'osm' && (
+          <div className="form-group">
+            <label>AI Extraction Prompt {mode === 'html' ? '(recommended)' : '(optional)'}</label>
+            <textarea
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              placeholder={mode === 'html' 
+                ? "Extract all restaurant names, addresses, phone numbers, ratings, and prices as a list"
+                : "Extract restaurant names, addresses, ratings..."
+              }
+              disabled={submitting}
+            />
+            <small>
+              {mode === 'html' 
+                ? 'Describe what data you want - AI will find and structure it for you'
+                : 'Describe what data you want to extract'
+              }
+            </small>
+          </div>
+        )}
 
-        {(mode === 'url' || mode === 'crawl') && (
+        {(mode === 'url' || mode === 'crawl' || mode === 'osm') && (
           <div className="form-row">
             <div className="form-group">
               <label>Export Format</label>
