@@ -71,24 +71,80 @@ class OverpassAPI:
         if bbox is None:
             bbox = await self._resolve_location(location)
         
-        # Build and execute Overpass query
-        query = self._build_steakhouse_query(bbox)
-        result = await self._request(query)
+        # Check bounding box size and reduce if too large
+        bbox_size = self._calculate_bbox_size(bbox)
+        logger.info(f"Bounding box size: {bbox_size:.4f} square degrees")
         
-        # Parse and format results
-        steakhouses = []
-        elements = result.get("elements", [])
+        # If bbox is very large (>0.5 square degrees), reduce it
+        # This helps prevent timeouts for large cities
+        original_bbox = bbox
+        if bbox_size > 0.5:
+            logger.warning(f"Large bounding box detected ({bbox_size:.4f}), reducing size to prevent timeout")
+            bbox = self._reduce_bbox(bbox, factor=0.6)
+            logger.info(f"Reduced bounding box size: {self._calculate_bbox_size(bbox):.4f} square degrees")
         
-        for element in elements[:limit]:
-            formatted = self._format_steakhouse(element)
-            if formatted:
-                steakhouses.append(formatted)
+        # Try query with automatic retry on timeout
+        max_retries = 3
+        include_relations = False  # Start without relations (faster)
         
-        # Enhance data if requested
-        if enhance and steakhouses:
-            steakhouses = await self._enhance_steakhouses(steakhouses)
+        for attempt in range(max_retries):
+            try:
+                # Build query (skip relations for large areas or first attempts)
+                query = self._build_steakhouse_query(bbox, include_relations=include_relations)
+                result = await self._request(query)
+                
+                # Parse and format results
+                steakhouses = []
+                elements = result.get("elements", [])
+                
+                for element in elements[:limit]:
+                    formatted = self._format_steakhouse(element)
+                    if formatted:
+                        steakhouses.append(formatted)
+                
+                # If we got results, return them
+                if steakhouses or attempt == max_retries - 1:
+                    logger.info(f"Found {len(steakhouses)} steakhouses in {location}")
+                    # Enhance data if requested
+                    if enhance and steakhouses:
+                        steakhouses = await self._enhance_steakhouses(steakhouses)
+                    return steakhouses
+                
+                # If no results and we haven't tried relations yet, try with relations
+                if not include_relations and attempt < max_retries - 1:
+                    logger.debug("No results found, retrying with relations included")
+                    include_relations = True
+                    continue
+                
+                # If still no results, return empty list
+                return []
+                
+            except ValueError as e:
+                error_msg = str(e)
+                # Check if it's a timeout error
+                if "timeout" in error_msg.lower() or "504" in error_msg:
+                    if attempt < max_retries - 1:
+                        # Reduce bounding box and retry
+                        reduction_factor = 0.6 - (attempt * 0.1)  # 0.6, 0.5, 0.4
+                        bbox = self._reduce_bbox(original_bbox, factor=reduction_factor)
+                        logger.warning(
+                            f"Overpass timeout on attempt {attempt + 1}/{max_retries}, "
+                            f"reducing bounding box to {self._calculate_bbox_size(bbox):.4f} square degrees"
+                        )
+                        await asyncio.sleep(2)  # Wait before retry
+                        continue
+                    else:
+                        # Last attempt failed
+                        raise ValueError(
+                            f"Overpass API timeout after {max_retries} attempts with reduced bounding boxes. "
+                            f"Try a smaller area or use coordinates for a specific neighborhood."
+                        )
+                else:
+                    # Not a timeout error, re-raise immediately
+                    raise
         
-        return steakhouses
+        # Should not reach here, but return empty list if we do
+        return []
     
     async def get_steakhouse_details(
         self,
@@ -136,25 +192,81 @@ out skel qt;"""
         
         return formatted
     
-    def _build_steakhouse_query(self, bbox: Tuple[float, float, float, float]) -> str:
+    def _calculate_bbox_size(self, bbox: Tuple[float, float, float, float]) -> float:
+        """
+        Calculate the approximate size of a bounding box in square degrees.
+        
+        Args:
+            bbox: Bounding box (south, west, north, east)
+        
+        Returns:
+            Approximate area in square degrees
+        """
+        south, west, north, east = bbox
+        lat_span = north - south
+        lon_span = east - west
+        return lat_span * lon_span
+    
+    def _reduce_bbox(self, bbox: Tuple[float, float, float, float], factor: float = 0.7) -> Tuple[float, float, float, float]:
+        """
+        Reduce bounding box size by centering it and reducing dimensions.
+        
+        Args:
+            bbox: Original bounding box (south, west, north, east)
+            factor: Reduction factor (0.7 = 70% of original size)
+        
+        Returns:
+            Reduced bounding box (south, west, north, east)
+        """
+        south, west, north, east = bbox
+        
+        # Calculate center
+        center_lat = (south + north) / 2
+        center_lon = (west + east) / 2
+        
+        # Calculate spans
+        lat_span = (north - south) * factor
+        lon_span = (east - west) * factor
+        
+        # Create new bbox centered on original
+        new_south = center_lat - lat_span / 2
+        new_north = center_lat + lat_span / 2
+        new_west = center_lon - lon_span / 2
+        new_east = center_lon + lon_span / 2
+        
+        return (new_south, new_west, new_north, new_east)
+    
+    def _build_steakhouse_query(self, bbox: Tuple[float, float, float, float], include_relations: bool = False) -> str:
         """
         Build Overpass QL query for steakhouses in bounding box.
         
         Args:
             bbox: Bounding box (south, west, north, east)
+            include_relations: Whether to include relations (slower, skip for large areas)
         
         Returns:
             Overpass QL query string
         """
         south, west, north, east = bbox
         
-        # Query for restaurants with steakhouse cuisine
-        # Matches: cuisine=steak_house, cuisine=steakhouse, cuisine=steak, etc.
-        query = f"""[out:json][timeout:25];
+        # Optimized query - start with nodes and ways only (faster)
+        # Relations are slower and often not needed for restaurants
+        if include_relations:
+            query = f"""[out:json][timeout:30];
 (
   node["amenity"="restaurant"]["cuisine"~"steak|steakhouse|steak_house"]({south},{west},{north},{east});
   way["amenity"="restaurant"]["cuisine"~"steak|steakhouse|steak_house"]({south},{west},{north},{east});
   relation["amenity"="restaurant"]["cuisine"~"steak|steakhouse|steak_house"]({south},{west},{north},{east});
+);
+out body;
+>;
+out skel qt;"""
+        else:
+            # Faster query without relations
+            query = f"""[out:json][timeout:30];
+(
+  node["amenity"="restaurant"]["cuisine"~"steak|steakhouse|steak_house"]({south},{west},{north},{east});
+  way["amenity"="restaurant"]["cuisine"~"steak|steakhouse|steak_house"]({south},{west},{north},{east});
 );
 out body;
 >;
@@ -175,9 +287,10 @@ out skel qt;"""
         # Hardcoded bounding boxes for major US cities
         # Format: (south, west, north, east)
         hardcoded_bboxes = {
-            "new york": (40.4774, -74.2591, 40.9176, -73.7004),
-            "new york, ny": (40.4774, -74.2591, 40.9176, -73.7004),
-            "nyc": (40.4774, -74.2591, 40.9176, -73.7004),
+            # New York City - optimized smaller bounding box (Manhattan + Brooklyn + Queens core)
+            "new york": (40.5774, -74.0591, 40.8176, -73.8004),
+            "new york, ny": (40.5774, -74.0591, 40.8176, -73.8004),
+            "nyc": (40.5774, -74.0591, 40.8176, -73.8004),
             "los angeles": (33.7037, -118.6682, 34.3373, -118.1553),
             "los angeles, ca": (33.7037, -118.6682, 34.3373, -118.1553),
             "la": (33.7037, -118.6682, 34.3373, -118.1553),
@@ -730,7 +843,8 @@ out skel qt;"""
             
             _last_request_time = datetime.now()
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # Increase timeout for large queries
+        async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 response = await client.post(
                     self.endpoint,
