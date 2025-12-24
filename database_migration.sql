@@ -48,3 +48,16 @@ COMMENT ON COLUMN scrape_jobs.same_domain IS 'Only crawl pages on the same domai
 COMMENT ON COLUMN scrape_jobs.use_javascript IS 'Use Playwright for JavaScript-rendered pages';
 COMMENT ON COLUMN scrape_jobs.extract_individual_pages IS 'Extract data from individual restaurant pages (default: true for restaurant listings)';
 
+-- =====================================================
+-- OSM-Only Mode Migration (Run separately if needed)
+-- =====================================================
+-- Add OSM-only mode columns
+ALTER TABLE scrape_jobs 
+ADD COLUMN IF NOT EXISTS osm_only BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS osm_location TEXT,
+ADD COLUMN IF NOT EXISTS osm_limit INTEGER DEFAULT 50;
+
+COMMENT ON COLUMN scrape_jobs.osm_only IS 'Use only OpenStreetMap Overpass API (no web scraping)';
+COMMENT ON COLUMN scrape_jobs.osm_location IS 'Location for OSM search (city name, coordinates, or bounding box)';
+COMMENT ON COLUMN scrape_jobs.osm_limit IS 'Maximum number of results from OSM (default: 50, max: 200)';
+

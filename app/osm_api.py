@@ -157,6 +157,58 @@ out skel qt;"""
         
         return query
     
+    def _normalize_location(self, location: str) -> List[str]:
+        """
+        Normalize location string and generate variations to try.
+        
+        Args:
+            location: Raw location string
+        
+        Returns:
+            List of location strings to try (in order of preference)
+        """
+        # Strip whitespace
+        location = location.strip()
+        
+        # Common location name corrections
+        corrections = {
+            "newyork": "New York, NY",
+            "newyorkcity": "New York, NY",
+            "nyc": "New York, NY",
+            "losangeles": "Los Angeles, CA",
+            "la": "Los Angeles, CA",
+            "sanfrancisco": "San Francisco, CA",
+            "sf": "San Francisco, CA",
+            "chicago": "Chicago, IL",
+            "houston": "Houston, TX",
+            "phoenix": "Phoenix, AZ",
+            "philadelphia": "Philadelphia, PA",
+            "sanantonio": "San Antonio, TX",
+            "sandiego": "San Diego, CA",
+            "dallas": "Dallas, TX",
+            "austin": "Austin, TX",
+            "miami": "Miami, FL",
+            "atlanta": "Atlanta, GA",
+            "boston": "Boston, MA",
+            "seattle": "Seattle, WA",
+            "denver": "Denver, CO",
+            "washington": "Washington, DC",
+            "dc": "Washington, DC",
+        }
+        
+        # Try exact match first (case-insensitive)
+        location_lower = location.lower().replace(" ", "").replace(",", "")
+        if location_lower in corrections:
+            return [corrections[location_lower], location]
+        
+        # Try partial matches
+        for key, value in corrections.items():
+            if key in location_lower or location_lower in key:
+                return [value, location]
+        
+        # Return original (stripped) if no corrections found
+        return [location]
+    
     async def _resolve_location(self, location: str) -> Tuple[float, float, float, float]:
         """
         Resolve location string to bounding box.
@@ -171,7 +223,16 @@ out skel qt;"""
         
         Returns:
             Bounding box tuple (south, west, north, east)
+        
+        Raises:
+            ValueError: If location cannot be resolved
         """
+        # Strip whitespace first
+        location = location.strip()
+        
+        if not location:
+            raise ValueError("Location cannot be empty")
+        
         # Check if it's already a bounding box string
         bbox_match = re.match(r'^([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)$', location)
         if bbox_match:
@@ -185,8 +246,31 @@ out skel qt;"""
             radius = 0.45  # ~50km in degrees
             return (lat - radius, lon - radius, lat + radius, lon + radius)
         
-        # Otherwise, geocode using Nominatim (free OSM geocoding service)
-        return await self._geocode_location(location)
+        # Get location variations to try
+        location_variations = self._normalize_location(location)
+        
+        # Try each variation until one works
+        last_error = None
+        for loc_variant in location_variations:
+            try:
+                return await self._geocode_location(loc_variant)
+            except ValueError as e:
+                last_error = e
+                logger.debug(f"Geocoding failed for '{loc_variant}': {e}")
+                continue
+        
+        # If all variations failed, raise with helpful error message
+        if len(location_variations) > 1:
+            raise ValueError(
+                f"Could not resolve location '{location}': neither name or coordinates are working. "
+                f"Tried: {', '.join(location_variations)}. "
+                f"Please try: '{location_variations[0]}' or provide coordinates (lat,lon) or bounding box."
+            )
+        else:
+            raise ValueError(
+                f"Could not resolve location '{location}': {str(last_error)}. "
+                f"Please check the spelling or provide coordinates (lat,lon) or bounding box."
+            )
     
     async def _geocode_location(self, location: str) -> Tuple[float, float, float, float]:
         """
@@ -234,9 +318,15 @@ out skel qt;"""
                 radius = 0.45  # ~50km
                 return (lat - radius, lon - radius, lat + radius, lon + radius)
         
+        except httpx.TimeoutException:
+            logger.error(f"Geocoding timeout for '{location}'")
+            raise ValueError(f"Geocoding timeout for '{location}'. Please try again or use coordinates.")
+        except httpx.RequestError as e:
+            logger.error(f"Geocoding request error for '{location}': {e}")
+            raise ValueError(f"Geocoding request failed for '{location}': {str(e)}")
         except Exception as e:
             logger.error(f"Geocoding failed for '{location}': {e}")
-            raise ValueError(f"Could not resolve location '{location}': {str(e)}")
+            raise ValueError(f"Location not found: '{location}'. Please check spelling or use coordinates (lat,lon).")
     
     def _format_steakhouse(self, element: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
